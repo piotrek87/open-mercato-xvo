@@ -250,6 +250,8 @@ After Sprint 8, Activity replaces CustomerInteraction entirely. Until then, both
 
 **Fixes in Sprint 3A:** `@app/modules/*` tsconfig alias, `mapActivityToResponse` in `.map()`, `activity-types.ts` default export, `ActivityLink.createdAt` in `em.create()`.
 
+**Removed before PR:** `QuickNoteDialog` — dead code, no trigger, not required by spec.
+
 ---
 
 ### Sprint 3B — Dictionary-backed Activity Types (Layer 3)
