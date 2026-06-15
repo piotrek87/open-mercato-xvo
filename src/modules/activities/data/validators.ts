@@ -109,3 +109,19 @@ export type ActivityCreate = z.infer<typeof activityCreateSchema>
 export type ActivityUpdate = z.infer<typeof activityUpdateSchema>
 export type ActivityComplete = z.infer<typeof activityCompleteSchema>
 export type ActivityCancel = z.infer<typeof activityCancelSchema>
+
+// ActivityLink schemas
+export const activityLinkCreateSchema = z.object({
+  entityType: z.string().min(1).max(100).regex(/^[a-z_]+:[a-z_]+$/, {
+    message: 'entityType must follow the pattern "module:entity" (e.g. "customers:person")',
+  }),
+  entityId: z.string().uuid(),
+  isPrimary: z.boolean().optional().default(false),
+})
+
+export const activityLinkUpdateSchema = z.object({
+  isPrimary: z.boolean(),
+})
+
+export type ActivityLinkCreate = z.infer<typeof activityLinkCreateSchema>
+export type ActivityLinkUpdate = z.infer<typeof activityLinkUpdateSchema>
