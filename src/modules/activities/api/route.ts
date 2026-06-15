@@ -48,7 +48,7 @@ const listQuerySchema = z.object({
 
 // --- Response DTO ---
 
-function mapActivityToResponse(a: Activity) {
+function mapActivityToResponse(a: Activity, links: { id: string; entityType: string; entityId: string; isPrimary: boolean }[] = []) {
   return {
     id: a.id,
     activityType: a.activityType,
@@ -80,6 +80,7 @@ function mapActivityToResponse(a: Activity) {
     createdAt: a.createdAt.toISOString(),
     updatedAt: a.updatedAt.toISOString(),
     customFields: {},
+    links,
   }
 }
 
@@ -359,7 +360,7 @@ export async function POST(request: Request) {
       })
     }
 
-    return NextResponse.json({ id: activity.id }, { status: 201 })
+    return NextResponse.json({ data: mapActivityToResponse(activity) }, { status: 201 })
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: 'Validation failed', details: error.issues }, { status: 400 })
