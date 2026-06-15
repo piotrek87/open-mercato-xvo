@@ -7,45 +7,49 @@ import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { LoadingMessage } from '@open-mercato/ui/backend/detail'
 import { EmptyState } from '@open-mercato/ui/backend/EmptyState'
 import { Button } from '@open-mercato/ui/primitives/button'
-import { EnumBadge, type EnumBadgeMap } from '@open-mercato/ui/backend/ValueIcons'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { CalendarIcon, ClockIcon, ActivityIcon } from 'lucide-react'
-
-type ActivityItem = {
-  id: string
-  subject: string
-  activityType: string
-  status: string
-  dueAt: string | null
-  createdAt: string
-}
+import type { ActivityTypeDefinition } from '../../../activity-types'
+import DefaultActivityCard, { type ActivityCardData } from './DefaultActivityCard'
+import ActivityFilterBar from './ActivityFilterBar'
 
 type ActivitiesResponse = {
-  items?: ActivityItem[]
-  data?: ActivityItem[]
+  data?: ActivityCardData[]
+  items?: ActivityCardData[]
+  hasMore?: boolean
 }
 
-const STATUS_MAP: EnumBadgeMap = {
-  not_started: { label: 'Not started', className: 'border-muted text-muted-foreground bg-muted/30' },
-  in_progress: { label: 'In progress', className: 'border-blue-200 text-blue-700 bg-blue-50' },
-  completed: { label: 'Completed', className: 'border-emerald-200 text-emerald-700 bg-emerald-50' },
-  cancelled: { label: 'Cancelled', className: 'border-red-200 text-red-700 bg-red-50' },
+type RegistryResponse = {
+  data?: ActivityTypeDefinition[]
 }
 
 function resolveEntityContext(context: unknown): { entityType: string | null; entityId: string | null } {
   const ctx = context && typeof context === 'object' ? (context as Record<string, unknown>) : {}
-  const entityType = typeof ctx.entityType === 'string' ? ctx.entityType : null
-  const entityId = typeof ctx.entityId === 'string' ? ctx.entityId : null
-  return { entityType, entityId }
+  return {
+    entityType: typeof ctx.entityType === 'string' ? ctx.entityType : null,
+    entityId: typeof ctx.entityId === 'string' ? ctx.entityId : null,
+  }
 }
 
 export default function ActivityTimelineWidget({ context }: InjectionWidgetComponentProps) {
   const t = useT()
   const { entityType, entityId } = React.useMemo(() => resolveEntityContext(context), [context])
 
-  const [items, setItems] = React.useState<ActivityItem[]>([])
+  const [items, setItems] = React.useState<ActivityCardData[]>([])
+  const [typeRegistry, setTypeRegistry] = React.useState<ActivityTypeDefinition[]>([])
+  const [activeFilter, setActiveFilter] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
+
+  // Load activity type registry (once)
+  React.useEffect(() => {
+    readApiResultOrThrow<RegistryResponse>('/api/activity-types', undefined, { allowNullResult: true })
+      .then((res) => {
+        if (Array.isArray(res?.data)) setTypeRegistry(res.data)
+      })
+      .catch(() => {
+        // Registry failure is non-fatal — we still show activities with default rendering
+      })
+  }, [])
 
   const loadActivities = React.useCallback(async () => {
     if (!entityType || !entityId) {
@@ -56,30 +60,31 @@ export default function ActivityTimelineWidget({ context }: InjectionWidgetCompo
     setError(null)
     try {
       const params = new URLSearchParams({
-        linkedEntityType: entityType,
-        linkedEntityId: entityId,
-        pageSize: '20',
+        entityType,
+        entityId,
+        limit: '50',
+        includeLinked: 'true',
       })
       const payload = await readApiResultOrThrow<ActivitiesResponse>(
         `/api/activities?${params.toString()}`,
         undefined,
         { allowNullResult: true },
       )
-      const list = Array.isArray(payload?.items)
-        ? payload.items
-        : Array.isArray((payload as ActivitiesResponse | null)?.data)
-          ? (payload as ActivitiesResponse).data ?? []
+      const list: ActivityCardData[] = Array.isArray(payload?.data)
+        ? (payload.data as ActivityCardData[])
+        : Array.isArray(payload?.items)
+          ? (payload.items as ActivityCardData[])
           : []
-      setItems(
-        list.map((item) => ({
-          id: String((item as ActivityItem).id ?? ''),
-          subject: String((item as ActivityItem).subject ?? ''),
-          activityType: String((item as ActivityItem).activityType ?? ''),
-          status: String((item as ActivityItem).status ?? 'not_started'),
-          dueAt: (item as ActivityItem).dueAt ?? null,
-          createdAt: String((item as ActivityItem).createdAt ?? ''),
-        })),
-      )
+      setItems(list.map((item) => ({
+        id: String(item.id ?? ''),
+        subject: String(item.subject ?? ''),
+        activityType: String(item.activityType ?? ''),
+        status: String(item.status ?? 'not_started'),
+        dueAt: item.dueAt ?? null,
+        occurredAt: item.occurredAt ?? null,
+        createdAt: String(item.createdAt ?? ''),
+        ownerUserId: item.ownerUserId ?? null,
+      })))
     } catch (err) {
       console.error('activities.timeline.load', err)
       setError(t('activities.timeline.error.load', 'Failed to load activities'))
@@ -91,6 +96,22 @@ export default function ActivityTimelineWidget({ context }: InjectionWidgetCompo
   React.useEffect(() => {
     void loadActivities()
   }, [loadActivities])
+
+  // Derived: types that actually appear in the current context
+  const presentTypeIds = React.useMemo(
+    () => new Set(items.map((i) => i.activityType)),
+    [items],
+  )
+  const availableFilterTypes = React.useMemo(
+    () => typeRegistry.filter((t) => presentTypeIds.has(t.id)),
+    [typeRegistry, presentTypeIds],
+  )
+
+  // Filtered items
+  const filteredItems = React.useMemo(
+    () => (activeFilter ? items.filter((i) => i.activityType === activeFilter) : items),
+    [items, activeFilter],
+  )
 
   if (loading) {
     return <LoadingMessage label={t('activities.timeline.loading', 'Loading activities…')} />
@@ -125,7 +146,7 @@ export default function ActivityTimelineWidget({ context }: InjectionWidgetCompo
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <span className="text-sm font-medium text-foreground">
           {t('activities.timeline.title', 'Activity Timeline')}
         </span>
@@ -135,34 +156,28 @@ export default function ActivityTimelineWidget({ context }: InjectionWidgetCompo
           </Link>
         </Button>
       </div>
+
+      {availableFilterTypes.length > 1 && (
+        <ActivityFilterBar
+          availableTypes={availableFilterTypes}
+          activeFilter={activeFilter}
+          onChange={setActiveFilter}
+        />
+      )}
+
       <ul className="flex flex-col gap-2">
-        {items.map((item) => (
-          <li
-            key={item.id}
-            className="rounded-md border border-border bg-card p-3 flex flex-col gap-1.5"
-          >
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <ActivityIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                <span className="text-sm font-medium text-foreground truncate">{item.subject}</span>
-              </div>
-              <EnumBadge value={item.status} map={STATUS_MAP} />
-            </div>
-            <div className="flex items-center gap-4 pl-6">
-              <span className="text-xs text-muted-foreground">{item.activityType}</span>
-              {item.dueAt ? (
-                <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                  <CalendarIcon className="size-3" aria-hidden="true" />
-                  {new Date(item.dueAt).toLocaleDateString()}
-                </span>
-              ) : null}
-              <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                <ClockIcon className="size-3" aria-hidden="true" />
-                {item.createdAt ? new Date(item.createdAt).toLocaleDateString() : '—'}
-              </span>
-            </div>
-          </li>
-        ))}
+        {filteredItems.map((item) => {
+          const typeDef = typeRegistry.find((td) => td.id === item.activityType)
+          return (
+            <li key={item.id}>
+              <React.Suspense
+                fallback={<DefaultActivityCard activity={item} typeDef={typeDef} />}
+              >
+                <DefaultActivityCard activity={item} typeDef={typeDef} />
+              </React.Suspense>
+            </li>
+          )
+        })}
       </ul>
     </div>
   )
