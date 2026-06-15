@@ -11,7 +11,7 @@
 | Phase | Step | Title | Status | Commit |
 |-------|------|-------|--------|--------|
 | 1 | 1.1 | Run folder + execution plan | done | — |
-| 1 | 1.2 | Module scaffold (index, acl, setup, di, events, encryption, activity-types) | todo | — |
+| 1 | 1.2 | Module scaffold (index, acl, setup, di, events, encryption, activity-types) | done | — |
 | 1 | 1.3 | Entity + validators | todo | — |
 | 1 | 1.4 | Migration file | todo | — |
 | 1 | 1.5 | Register in src/modules.ts + yarn generate | todo | — |
