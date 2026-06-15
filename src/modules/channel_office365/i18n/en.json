@@ -1,0 +1,23 @@
+{
+  "channel_office365.module.title": "Office 365 Calendar",
+  "channel_office365.nav.group": "Office 365",
+  "channel_office365.page.title": "Office 365 Calendar",
+  "channel_office365.loading": "Loading connected accounts…",
+  "channel_office365.error.load": "Failed to load calendar connections",
+  "channel_office365.empty.title": "No calendar connected",
+  "channel_office365.empty.description": "Connect your Microsoft 365 account to sync calendar events to Activities.",
+  "channel_office365.connect.button": "Connect calendar",
+  "channel_office365.connect.connecting": "Connecting…",
+  "channel_office365.connect.error": "Could not start OAuth flow",
+  "channel_office365.disconnect.button": "Disconnect",
+  "channel_office365.disconnect.confirm": "Disconnect this calendar? Calendar sync will stop.",
+  "channel_office365.disconnect.success": "Calendar disconnected",
+  "channel_office365.disconnect.error": "Failed to disconnect calendar",
+  "channel_office365.reauth.button": "Reconnect",
+  "channel_office365.status.connected": "Connected — syncing calendar events",
+  "channel_office365.status.reauth": "Reconnect required",
+  "channel_office365.status.error": "Sync error",
+  "channel_office365.lastSync": "Last sync:",
+  "channel_office365.setup.title": "Azure App Registration required",
+  "channel_office365.setup.description": "Configure Client ID and Secret in Settings → Integrations → Office 365 Calendar before connecting."
+}
