@@ -16,7 +16,7 @@
 | 1 | 1.4 | Migration file | done | c96af11 |
 | 1 | 1.5 | Register in src/modules.ts + yarn generate | done | 115492d |
 | 2 | 2.1 | API list + create route + openapi.ts | done | fb0a883 |
-| 2 | 2.2 | API single record routes (GET/PUT/DELETE) | done | — |
+| 2 | 2.2 | API single record routes (GET/PUT/DELETE) | done | 9354616 |
 | 2 | 2.3 | Lifecycle routes (complete, cancel, reopen, restore) | todo | — |
 | 3 | 3.1 | Backend list page | todo | — |
 | 3 | 3.2 | ActivityTimeline widget component | todo | — |
