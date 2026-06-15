@@ -1,23 +1,87 @@
-export type ActivityTypeDefinition = {
+export interface ActivityTypeCapabilities {
+  hasDueDate?: boolean
+  hasStatus?: boolean
+  hasOwner?: boolean
+  hasParticipants?: boolean
+  hasRecurrence?: boolean
+  hasExternalSync?: boolean
+  hasLocation?: boolean
+  hasBody?: boolean
+}
+
+export interface ActivityTypeAction {
   id: string
   label: string
   icon: string
-  lifecycleMode: 'fact' | 'task'
-  color?: string
+  variant: 'default' | 'outline' | 'ghost' | 'destructive'
+  feature?: string
+  condition?: 'when_planned' | 'when_in_progress' | 'when_completed' | 'when_overdue' | 'always'
 }
 
-export const BUILT_IN_ACTIVITY_TYPES: ActivityTypeDefinition[] = [
-  { id: 'email', label: 'Email', icon: 'Mail', lifecycleMode: 'fact' },
-  { id: 'meeting', label: 'Meeting', icon: 'Users', lifecycleMode: 'fact' },
-  { id: 'call', label: 'Call', icon: 'Phone', lifecycleMode: 'fact' },
-  { id: 'note', label: 'Note', icon: 'FileText', lifecycleMode: 'fact' },
-  { id: 'task', label: 'Task', icon: 'CheckSquare', lifecycleMode: 'task' },
+export interface ActivityTypeDefinition {
+  id: string
+  moduleId: string
+  label: string
+  icon: string
+  color?: string
+  lifecycleMode: 'fact' | 'task'
+  capabilities: ActivityTypeCapabilities
+  viewFeature?: string
+  createFeature?: string
+  filterLabel?: string
+  filterIcon?: string
+  filterGroup?: string
+  actions?: ActivityTypeAction[]
+  primaryActionId?: string
+}
+
+export const activityTypes: ActivityTypeDefinition[] = [
+  {
+    id: 'email',
+    moduleId: 'activities',
+    label: 'activities.types.email',
+    icon: 'Mail',
+    lifecycleMode: 'fact',
+    capabilities: { hasBody: true, hasParticipants: true },
+  },
+  {
+    id: 'meeting',
+    moduleId: 'activities',
+    label: 'activities.types.meeting',
+    icon: 'CalendarDays',
+    lifecycleMode: 'task',
+    capabilities: { hasDueDate: true, hasLocation: true, hasParticipants: true, hasRecurrence: true },
+  },
+  {
+    id: 'call',
+    moduleId: 'activities',
+    label: 'activities.types.call',
+    icon: 'Phone',
+    lifecycleMode: 'task',
+    capabilities: { hasDueDate: true, hasParticipants: true },
+  },
+  {
+    id: 'note',
+    moduleId: 'activities',
+    label: 'activities.types.note',
+    icon: 'FileText',
+    lifecycleMode: 'fact',
+    capabilities: { hasBody: true },
+  },
+  {
+    id: 'task',
+    moduleId: 'activities',
+    label: 'activities.types.task',
+    icon: 'CheckSquare',
+    lifecycleMode: 'task',
+    capabilities: { hasDueDate: true, hasStatus: true, hasOwner: true },
+  },
 ]
 
 export function getAllActivityTypes(): ActivityTypeDefinition[] {
-  return BUILT_IN_ACTIVITY_TYPES
+  return activityTypes
 }
 
 export function getActivityTypeById(id: string): ActivityTypeDefinition | undefined {
-  return BUILT_IN_ACTIVITY_TYPES.find((t) => t.id === id)
+  return activityTypes.find((t) => t.id === id)
 }
