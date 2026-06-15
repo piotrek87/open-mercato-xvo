@@ -13,7 +13,7 @@
 | 1 | 1.1 | Run folder + execution plan | done | — |
 | 1 | 1.2 | Module scaffold (index, acl, setup, di, events, encryption, activity-types) | done | 0f6bf2e |
 | 1 | 1.3 | Entity + validators | done | f8dd62b |
-| 1 | 1.4 | Migration file | todo | — |
+| 1 | 1.4 | Migration file | done | pending |
 | 1 | 1.5 | Register in src/modules.ts + yarn generate | todo | — |
 | 2 | 2.1 | API list + create route + openapi.ts | todo | — |
 | 2 | 2.2 | API single record routes (GET/PUT/DELETE) | todo | — |
