@@ -125,3 +125,46 @@ export const activityLinkUpdateSchema = z.object({
 
 export type ActivityLinkCreate = z.infer<typeof activityLinkCreateSchema>
 export type ActivityLinkUpdate = z.infer<typeof activityLinkUpdateSchema>
+
+// ActivityTypeDefinitionRecord schemas
+const activityTypeCapabilitiesSchema = z.object({
+  hasBody: z.boolean().optional(),
+  hasDueDate: z.boolean().optional(),
+  hasStatus: z.boolean().optional(),
+  hasOwner: z.boolean().optional(),
+  hasParticipants: z.boolean().optional(),
+  hasLocation: z.boolean().optional(),
+  hasRecurrence: z.boolean().optional(),
+}).default({})
+
+export const activityTypeDefinitionCreateSchema = z.object({
+  typeId: z.string().regex(/^custom:[a-z_]+$/, 'Must start with "custom:" followed by lowercase letters and underscores'),
+  label: z.string().min(1).max(200),
+  icon: z.string().min(1).max(100).default('Activity'),
+  color: z.string().max(50).optional(),
+  lifecycleMode: z.enum(LIFECYCLE_MODES).default('task'),
+  capabilities: activityTypeCapabilitiesSchema,
+  viewFeature: z.string().max(200).optional(),
+  createFeature: z.string().max(200).optional(),
+  filterLabel: z.string().max(200).optional(),
+  filterGroup: z.string().max(100).optional(),
+  isActive: z.boolean().default(true),
+  sortOrder: z.number().int().min(0).max(9999).default(0),
+})
+
+export const activityTypeDefinitionUpdateSchema = z.object({
+  label: z.string().min(1).max(200).optional(),
+  icon: z.string().min(1).max(100).optional(),
+  color: z.string().max(50).nullable().optional(),
+  lifecycleMode: z.enum(LIFECYCLE_MODES).optional(),
+  capabilities: activityTypeCapabilitiesSchema.optional(),
+  viewFeature: z.string().max(200).nullable().optional(),
+  createFeature: z.string().max(200).nullable().optional(),
+  filterLabel: z.string().max(200).nullable().optional(),
+  filterGroup: z.string().max(100).nullable().optional(),
+  isActive: z.boolean().optional(),
+  sortOrder: z.number().int().min(0).max(9999).optional(),
+})
+
+export type ActivityTypeDefinitionCreate = z.infer<typeof activityTypeDefinitionCreateSchema>
+export type ActivityTypeDefinitionUpdate = z.infer<typeof activityTypeDefinitionUpdateSchema>

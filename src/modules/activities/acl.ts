@@ -24,6 +24,12 @@ export const features = [
     module: 'activities',
     dependsOn: ['activities.view'],
   },
+  {
+    id: 'activities.manage_types',
+    title: 'Create, edit and deactivate custom activity types (Layer 3)',
+    module: 'activities',
+    dependsOn: ['activities.view'],
+  },
 ]
 
 export default features

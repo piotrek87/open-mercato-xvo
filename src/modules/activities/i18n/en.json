@@ -3,8 +3,6 @@
   "activities.nav.group": "Activities",
   "activities.timeline.tab.label": "Activities",
   "activities.list.title": "Activities",
-  "activities.list.empty.title": "No activities yet",
-  "activities.list.empty.description": "Start logging activities to track interactions with your contacts.",
   "activities.list.new.button": "Log Activity",
   "activities.columns.subject": "Subject",
   "activities.columns.activityType": "Type",

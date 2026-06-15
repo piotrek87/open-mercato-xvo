@@ -9,6 +9,7 @@ export const setup: ModuleSetupConfig = {
       'activities.complete',
       'activities.cancel',
       'activities.view_private',
+      'activities.manage_types',
     ],
     employee: [
       'activities.view',

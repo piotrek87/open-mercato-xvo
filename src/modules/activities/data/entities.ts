@@ -1,5 +1,15 @@
 import { Entity, PrimaryKey, Property, Index, Unique } from '@mikro-orm/decorators/legacy'
 
+export type ActivityTypeCapabilitiesMap = {
+  hasBody?: boolean
+  hasDueDate?: boolean
+  hasStatus?: boolean
+  hasOwner?: boolean
+  hasParticipants?: boolean
+  hasLocation?: boolean
+  hasRecurrence?: boolean
+}
+
 // Note: A partial unique index on (external_id, external_provider, organization_id) WHERE external_id IS NOT NULL
 // must be added manually to the migration SQL — MikroORM decorators do not support partial indexes.
 
@@ -139,4 +149,63 @@ export class ActivityLink {
 
   @Property({ name: 'created_by_user_id', type: 'uuid', nullable: true })
   createdByUserId?: string | null
+}
+
+@Entity({ tableName: 'activity_type_definitions' })
+@Index({ name: 'activity_type_defs_org_idx', properties: ['organizationId', 'tenantId', 'isActive', 'sortOrder'] })
+@Unique({ name: 'activity_type_defs_type_org_unique', properties: ['typeId', 'organizationId'] })
+export class ActivityTypeDefinitionRecord {
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'type_id', type: 'varchar', length: 100 })
+  typeId!: string
+
+  @Property({ name: 'module_id', type: 'varchar', length: 100, default: 'activities' })
+  moduleId: string = 'activities'
+
+  @Property({ type: 'varchar', length: 200 })
+  label!: string
+
+  @Property({ type: 'varchar', length: 100, default: 'Activity' })
+  icon: string = 'Activity'
+
+  @Property({ type: 'varchar', length: 50, nullable: true })
+  color?: string | null
+
+  @Property({ name: 'lifecycle_mode', type: 'varchar', length: 10, default: 'task' })
+  lifecycleMode: 'fact' | 'task' = 'task'
+
+  @Property({ type: 'jsonb', default: '{}' })
+  capabilities: ActivityTypeCapabilitiesMap = {}
+
+  @Property({ name: 'view_feature', type: 'varchar', length: 200, nullable: true })
+  viewFeature?: string | null
+
+  @Property({ name: 'create_feature', type: 'varchar', length: 200, nullable: true })
+  createFeature?: string | null
+
+  @Property({ name: 'filter_label', type: 'varchar', length: 200, nullable: true })
+  filterLabel?: string | null
+
+  @Property({ name: 'filter_group', type: 'varchar', length: 100, nullable: true })
+  filterGroup?: string | null
+
+  @Property({ name: 'is_active', type: 'boolean', default: true })
+  isActive: boolean = true
+
+  @Property({ name: 'sort_order', type: 'smallint', default: 0 })
+  sortOrder: number = 0
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onCreate: () => new Date(), onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
 }
