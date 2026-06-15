@@ -1,12 +1,13 @@
 'use client'
 
 import * as React from 'react'
+import Link from 'next/link'
 import type { InjectionWidgetComponentProps } from '@open-mercato/shared/modules/widgets/injection'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { LoadingMessage } from '@open-mercato/ui/backend/detail'
 import { EmptyState } from '@open-mercato/ui/backend/EmptyState'
 import { Button } from '@open-mercato/ui/primitives/button'
-import { EnumBadge } from '@open-mercato/ui/backend/ValueIcons'
+import { EnumBadge, type EnumBadgeMap } from '@open-mercato/ui/backend/ValueIcons'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { CalendarIcon, ClockIcon, ActivityIcon } from 'lucide-react'
 
@@ -24,24 +25,11 @@ type ActivitiesResponse = {
   data?: ActivityItem[]
 }
 
-type WidgetContext = {
-  entityType?: string
-  entityId?: string
-  record?: Record<string, unknown>
-}
-
-const STATUS_SEVERITY: Record<string, 'default' | 'success' | 'warning' | 'error' | 'info'> = {
-  not_started: 'default',
-  in_progress: 'info',
-  completed: 'success',
-  cancelled: 'error',
-}
-
-const STATUS_LABELS: Record<string, string> = {
-  not_started: 'Not started',
-  in_progress: 'In progress',
-  completed: 'Completed',
-  cancelled: 'Cancelled',
+const STATUS_MAP: EnumBadgeMap = {
+  not_started: { label: 'Not started', className: 'border-muted text-muted-foreground bg-muted/30' },
+  in_progress: { label: 'In progress', className: 'border-blue-200 text-blue-700 bg-blue-50' },
+  completed: { label: 'Completed', className: 'border-emerald-200 text-emerald-700 bg-emerald-50' },
+  cancelled: { label: 'Cancelled', className: 'border-red-200 text-red-700 bg-red-50' },
 }
 
 function resolveEntityContext(context: unknown): { entityType: string | null; entityId: string | null } {
@@ -51,7 +39,7 @@ function resolveEntityContext(context: unknown): { entityType: string | null; en
   return { entityType, entityId }
 }
 
-export default function ActivityTimelineWidget({ context }: InjectionWidgetComponentProps<WidgetContext>) {
+export default function ActivityTimelineWidget({ context }: InjectionWidgetComponentProps) {
   const t = useT()
   const { entityType, entityId } = React.useMemo(() => resolveEntityContext(context), [context])
 
@@ -105,7 +93,7 @@ export default function ActivityTimelineWidget({ context }: InjectionWidgetCompo
   }, [loadActivities])
 
   if (loading) {
-    return <LoadingMessage message={t('activities.timeline.loading', 'Loading activities…')} />
+    return <LoadingMessage label={t('activities.timeline.loading', 'Loading activities…')} />
   }
 
   if (error) {
@@ -124,9 +112,11 @@ export default function ActivityTimelineWidget({ context }: InjectionWidgetCompo
           'activities.timeline.empty.description',
           'Log an activity to start tracking calls, tasks, and meetings for this record.',
         )}
-        action={
-          <Button href="/backend/activities" size="sm" variant="outline">
-            {t('activities.timeline.action.log', 'Log Activity')}
+        actions={
+          <Button asChild size="sm" variant="outline">
+            <Link href="/backend/activities">
+              {t('activities.timeline.action.log', 'Log Activity')}
+            </Link>
           </Button>
         }
       />
@@ -139,8 +129,10 @@ export default function ActivityTimelineWidget({ context }: InjectionWidgetCompo
         <span className="text-sm font-medium text-foreground">
           {t('activities.timeline.title', 'Activity Timeline')}
         </span>
-        <Button href="/backend/activities" size="sm" variant="outline">
-          {t('activities.timeline.action.log', 'Log Activity')}
+        <Button asChild size="sm" variant="outline">
+          <Link href="/backend/activities">
+            {t('activities.timeline.action.log', 'Log Activity')}
+          </Link>
         </Button>
       </div>
       <ul className="flex flex-col gap-2">
@@ -154,11 +146,7 @@ export default function ActivityTimelineWidget({ context }: InjectionWidgetCompo
                 <ActivityIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                 <span className="text-sm font-medium text-foreground truncate">{item.subject}</span>
               </div>
-              <EnumBadge
-                value={item.status}
-                label={STATUS_LABELS[item.status] ?? item.status}
-                severity={STATUS_SEVERITY[item.status] ?? 'default'}
-              />
+              <EnumBadge value={item.status} map={STATUS_MAP} />
             </div>
             <div className="flex items-center gap-4 pl-6">
               <span className="text-xs text-muted-foreground">{item.activityType}</span>

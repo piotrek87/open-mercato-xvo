@@ -1,10 +1,14 @@
 'use client'
 import * as React from 'react'
+import { useQuery } from '@tanstack/react-query'
+import Link from 'next/link'
 import { Page, PageHeader, PageBody } from '@open-mercato/ui/backend/Page'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import { TruncatedCell } from '@open-mercato/ui/backend/TruncatedCell'
-import { EnumBadge } from '@open-mercato/ui/backend/ValueIcons'
+import { EnumBadge, type EnumBadgeMap } from '@open-mercato/ui/backend/ValueIcons'
+import { EmptyState } from '@open-mercato/ui/backend/EmptyState'
 import { Button } from '@open-mercato/ui/primitives/button'
+import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import type { ColumnDef } from '@tanstack/react-table'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { PlusIcon } from 'lucide-react'
@@ -19,24 +23,31 @@ type ActivityRow = {
   createdAt: string
 }
 
-const STATUS_LABELS: Record<string, string> = {
-  not_started: 'Not started',
-  in_progress: 'In progress',
-  completed: 'Completed',
-  cancelled: 'Cancelled',
-  snoozed: 'Snoozed',
+type ActivitiesListResponse = {
+  items: ActivityRow[]
+  total?: number
 }
 
-const STATUS_SEVERITY: Record<string, 'default' | 'success' | 'warning' | 'error' | 'info'> = {
-  not_started: 'default',
-  in_progress: 'info',
-  completed: 'success',
-  cancelled: 'error',
-  snoozed: 'warning',
+const STATUS_MAP: EnumBadgeMap = {
+  not_started: { label: 'Not started', className: 'border-muted text-muted-foreground bg-muted/30' },
+  in_progress: { label: 'In progress', className: 'border-blue-200 text-blue-700 bg-blue-50' },
+  completed: { label: 'Completed', className: 'border-emerald-200 text-emerald-700 bg-emerald-50' },
+  cancelled: { label: 'Cancelled', className: 'border-red-200 text-red-700 bg-red-50' },
+  snoozed: { label: 'Snoozed', className: 'border-amber-200 text-amber-700 bg-amber-50' },
 }
 
 export default function ActivitiesListPage() {
   const t = useT()
+
+  const { data: response, isLoading, error } = useQuery({
+    queryKey: ['activities', 'list'],
+    queryFn: async () => {
+      const result = await apiCall<ActivitiesListResponse>('/api/activities?limit=100')
+      return result.result
+    },
+  })
+
+  const rows: ActivityRow[] = response?.items ?? []
 
   const columns: ColumnDef<ActivityRow>[] = React.useMemo(
     () => [
@@ -44,9 +55,10 @@ export default function ActivitiesListPage() {
         accessorKey: 'subject',
         header: t('activities.list.column.subject', 'Subject'),
         cell: ({ getValue }) => (
-          <TruncatedCell value={String(getValue() ?? '')} meta={{ maxWidth: 320 }} />
+          <TruncatedCell maxWidth="max-w-[320px]">
+            <span className="text-sm">{String(getValue() ?? '')}</span>
+          </TruncatedCell>
         ),
-        meta: { maxWidth: 320 },
       },
       {
         accessorKey: 'activityType',
@@ -58,16 +70,9 @@ export default function ActivitiesListPage() {
       {
         accessorKey: 'status',
         header: t('activities.list.column.status', 'Status'),
-        cell: ({ getValue }) => {
-          const val = String(getValue() ?? '')
-          return (
-            <EnumBadge
-              value={val}
-              label={STATUS_LABELS[val] ?? val}
-              severity={STATUS_SEVERITY[val] ?? 'default'}
-            />
-          )
-        },
+        cell: ({ getValue }) => (
+          <EnumBadge value={String(getValue() ?? '')} map={STATUS_MAP} />
+        ),
       },
       {
         accessorKey: 'ownerUserId',
@@ -105,9 +110,11 @@ export default function ActivitiesListPage() {
   )
 
   const toolbar = (
-    <Button href="/backend/activities/new" size="sm">
-      <PlusIcon className="size-4 mr-1" />
-      {t('activities.list.action.create', 'New activity')}
+    <Button asChild size="sm">
+      <Link href="/backend/activities/new">
+        <PlusIcon className="size-4 mr-1" />
+        {t('activities.list.action.create', 'New activity')}
+      </Link>
     </Button>
   )
 
@@ -119,17 +126,20 @@ export default function ActivitiesListPage() {
       />
       <PageBody>
         <DataTable
-          entityId="activities:activity"
-          apiPath="/api/activities"
-          extensionTableId="activities.list"
           columns={columns}
-          emptyState={{
-            title: t('activities.list.empty.title', 'No activities yet'),
-            description: t(
-              'activities.list.empty.description',
-              'Create your first activity to start tracking tasks, calls, and meetings.',
-            ),
-          }}
+          data={rows}
+          isLoading={isLoading}
+          error={error ? t('activities.list.error.load', 'Failed to load activities') : null}
+          extensionTableId="activities.list"
+          emptyState={
+            <EmptyState
+              title={t('activities.list.empty.title', 'No activities yet')}
+              description={t(
+                'activities.list.empty.description',
+                'Create your first activity to start tracking tasks, calls, and meetings.',
+              )}
+            />
+          }
         />
       </PageBody>
     </Page>

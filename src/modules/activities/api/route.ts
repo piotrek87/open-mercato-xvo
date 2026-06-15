@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import type { EntityManager } from '@mikro-orm/postgresql'
+import type { EntityManager, FilterQuery } from '@mikro-orm/postgresql'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
@@ -177,10 +177,10 @@ export async function GET(request: Request) {
 
     const orderBy = { createdAt: query.sort, id: query.sort } as { createdAt: 'asc' | 'desc'; id: 'asc' | 'desc' }
 
-    const results = await findWithDecryption(
+    const results = await findWithDecryption<Activity>(
       em,
       Activity,
-      where as Parameters<typeof findWithDecryption>[2],
+      where as FilterQuery<Activity>,
       { limit: parsedLimit + 1, orderBy },
       { tenantId: auth.tenantId, organizationId: orgId ?? '' },
     )
@@ -273,7 +273,7 @@ export async function POST(request: Request) {
         () => {
           activity.id = parsed.id ?? crypto.randomUUID()
           activity.organizationId = orgId ?? ''
-          activity.tenantId = auth.tenantId
+          activity.tenantId = auth.tenantId as string
           activity.activityType = parsed.activityType
           activity.lifecycleMode = parsed.lifecycleMode
           activity.subject = parsed.subject
@@ -376,7 +376,7 @@ const activityResponseSchema = z.object({
   isActive: z.boolean(),
   createdAt: z.string(),
   updatedAt: z.string(),
-  customFields: z.record(z.unknown()),
+  customFields: z.record(z.string(), z.unknown()),
 })
 
 const listResponseSchema = z.object({

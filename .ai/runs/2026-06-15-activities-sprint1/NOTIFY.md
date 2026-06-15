@@ -16,3 +16,11 @@
 - TypeScript typecheck: PASS
 - API layer complete: 7 route files across list, single-record, and lifecycle endpoints
 - Phase 3 (Backend UI + Widget) starting next
+
+## 2026-06-15T00:00:00Z — final gate passed
+- All 13 steps complete
+- TypeScript typecheck: PASS (activities module clean; pre-existing framework errors confirmed not regressions)
+- Unit tests: 34/34 passing
+- Build: SKIPPED (expected > 3 min)
+- Sprint 1 scope fully implemented
+- Awaiting user push + PR creation

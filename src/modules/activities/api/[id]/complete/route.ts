@@ -36,6 +36,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       em,
       Activity,
       { id: params.id, tenantId: auth.tenantId, deletedAt: null },
+      undefined,
       { tenantId: auth.tenantId, organizationId: auth.orgId ?? '' },
     )
 

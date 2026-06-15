@@ -11,7 +11,7 @@ import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { Activity } from '../../data/entities'
 import { activityUpdateSchema } from '../../data/validators'
 import { eventsConfig } from '../../events'
-import { buildActivitiesCrudOpenApi, activityOkSchema } from '../openapi'
+import { activityOkSchema } from '../openapi'
 
 // --- Response DTO (duplicated from ../route.ts — cannot import between Next.js route files) ---
 
@@ -91,6 +91,7 @@ export async function GET(
       em,
       Activity,
       { id: params.id, tenantId: auth.tenantId, deletedAt: null },
+      undefined,
       { tenantId: auth.tenantId, organizationId: auth.orgId ?? '' },
     )
 
@@ -140,6 +141,7 @@ export async function PUT(
       em,
       Activity,
       { id: params.id, tenantId: auth.tenantId, deletedAt: null },
+      undefined,
       { tenantId: auth.tenantId, organizationId: auth.orgId ?? '' },
     )
 
@@ -254,6 +256,7 @@ export async function DELETE(
       em,
       Activity,
       { id: params.id, tenantId: auth.tenantId, deletedAt: null },
+      undefined,
       { tenantId: auth.tenantId, organizationId: auth.orgId ?? '' },
     )
 
@@ -357,23 +360,28 @@ const activityResponseSchema = z.object({
   isActive: z.boolean(),
   createdAt: z.string(),
   updatedAt: z.string(),
-  customFields: z.record(z.unknown()),
+  customFields: z.record(z.string(), z.unknown()),
 })
 
-export const openApi: OpenApiRouteDoc = buildActivitiesCrudOpenApi({
-  resourceName: 'Activity',
-  pluralName: 'Activities',
-  get: {
-    description: 'Retrieve a single activity by ID.',
-    responseSchema: activityResponseSchema,
+export const openApi: OpenApiRouteDoc = {
+  tag: 'Activities',
+  summary: 'Activity detail',
+  methods: {
+    GET: {
+      summary: 'Get activity',
+      description: 'Retrieve a single activity by ID.',
+      responses: [{ status: 200, description: 'Activity record', schema: activityResponseSchema }],
+    },
+    PUT: {
+      summary: 'Update activity',
+      description: 'Update an existing activity. Only provided fields are changed; immutable fields (activityType, lifecycleMode) are ignored.',
+      requestBody: { schema: activityUpdateSchema, description: 'Fields to update.' },
+      responses: [{ status: 200, description: 'Updated activity', schema: activityResponseSchema }],
+    },
+    DELETE: {
+      summary: 'Delete activity',
+      description: 'Soft-delete an activity (sets deletedAt). Deleted records are excluded from list queries.',
+      responses: [{ status: 200, description: 'Deleted', schema: activityOkSchema }],
+    },
   },
-  update: {
-    schema: activityUpdateSchema,
-    description: 'Update an existing activity. Only provided fields are changed; immutable fields (activityType, lifecycleMode) are ignored.',
-    responseSchema: activityResponseSchema,
-  },
-  delete: {
-    description: 'Soft-delete an activity (sets deletedAt). Deleted records are excluded from list queries.',
-    responseSchema: activityOkSchema,
-  },
-})
+}

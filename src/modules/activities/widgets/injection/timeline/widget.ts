@@ -9,7 +9,7 @@ const widget: InjectionWidgetModule = {
     features: ['activities.view'],
     priority: 20,
   },
-  Widget: ActivityTimelineWidget,
+  Widget: ActivityTimelineWidget as InjectionWidgetModule['Widget'],
 }
 
 export default widget
