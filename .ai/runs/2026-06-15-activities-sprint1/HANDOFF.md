@@ -2,26 +2,27 @@
 
 **Last updated:** 2026-06-15T00:00:00Z
 **Branch:** feat/activities-sprint1
-**PR:** not yet opened (no gh CLI / remote)
-**Current phase/step:** Phase 1 Step 1.1
-**Last commit:** — (run folder creation, pre-first-code-commit)
+**PR:** not yet opened
+**Current phase/step:** Phase 2 complete — Phase 3 next (Step 3.1)
+**Last commit:** 72d2c17 — feat(activities): lifecycle routes complete/cancel/reopen/restore
 
 ## What just happened
-- Git initialized: `main` → initial scaffold commit, `develop` branch, `feat/activities-sprint1` branch created
-- Run folder created with PLAN.md, HANDOFF.md, NOTIFY.md
+- Checkpoint 1 passed: TypeScript typecheck clean across all 7 steps
+- Phase 1 (module scaffold, entity, migration, registration) complete
+- Phase 2 (full API layer) complete: list/create, GET/PUT/DELETE, and all 4 lifecycle routes
 
 ## Next concrete action
-- Step 1.2: Create module scaffold files (index.ts, acl.ts, setup.ts, di.ts, events.ts, encryption.ts, activity-types.ts)
+- Start Step 3.1: `src/modules/activities/backend/page.tsx` + `page.meta.ts` — backend admin list page
 
 ## Blockers / open questions
-- No git remote / `gh` CLI → PR will be a local branch; user must push + create PR manually
-- Migration SQL will be hand-authored (no live DB for `yarn db:generate` probe)
+- None
 
 ## Environment caveats
-- Dev runtime runnable: unknown (not started)
-- Playwright / browser checks: skipped — no running dev server
-- Database/migration state: clean (no migrations applied)
+- Dev runtime runnable: unknown (no live DB for migration test)
+- Playwright / browser checks: skipped (no UI touched in Phase 1-2)
+- Database/migration state: migration file authored; not yet applied (user must run yarn db:migrate after review)
+- No git remote / gh CLI — PR will be local-only; user pushes manually
 
 ## Worktree
-- Path: c:/Users/piotr.kowalczyk/OpenMercato/my-app (primary worktree)
-- Created this run: no (primary worktree, no secondary worktree created)
+- Path: primary worktree (c:/Users/piotr.kowalczyk/OpenMercato/my-app)
+- Created this run: no (using primary worktree on feat/activities-sprint1 branch)

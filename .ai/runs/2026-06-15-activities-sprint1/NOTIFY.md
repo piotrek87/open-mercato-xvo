@@ -10,3 +10,9 @@
   - Primary worktree used (no secondary worktree)
   - Migration SQL hand-authored (no live DB connection)
   - Injection spot IDs verified from framework source: customers.person.detail:tabs, detail:customers.company:tabs, sales.document.detail.order:tabs
+
+## 2026-06-15T00:00:00Z — checkpoint 1 passed
+- Steps covered: 1.2–2.3 (7 steps)
+- TypeScript typecheck: PASS
+- API layer complete: 7 route files across list, single-record, and lifecycle endpoints
+- Phase 3 (Backend UI + Widget) starting next
