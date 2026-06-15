@@ -20,7 +20,7 @@
 | 2 | 2.3 | Lifecycle routes (complete, cancel, reopen, restore) | done | 72d2c17 |
 | 3 | 3.1 | Backend list page | done | 411955d |
 | 3 | 3.2 | ActivityTimeline widget component | done | ba2851e |
-| 3 | 3.3 | Widget injection table | todo | — |
+| 3 | 3.3 | Widget injection table | done | TBD |
 | 4 | 4.1 | i18n translations (en.json) | todo | — |
 | 4 | 4.2 | Unit tests for validators + lifecycle state machine | todo | — |
 
