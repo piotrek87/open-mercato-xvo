@@ -24,8 +24,9 @@ type ActivityRow = {
 }
 
 type ActivitiesListResponse = {
-  items: ActivityRow[]
-  total?: number
+  data: ActivityRow[]
+  hasMore?: boolean
+  nextCursor?: string | null
 }
 
 const STATUS_MAP: EnumBadgeMap = {
@@ -47,7 +48,7 @@ export default function ActivitiesListPage() {
     },
   })
 
-  const rows: ActivityRow[] = response?.items ?? []
+  const rows: ActivityRow[] = response?.data ?? []
 
   const columns: ColumnDef<ActivityRow>[] = React.useMemo(
     () => [
