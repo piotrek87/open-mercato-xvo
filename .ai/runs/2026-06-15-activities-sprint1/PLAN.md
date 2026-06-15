@@ -21,7 +21,7 @@
 | 3 | 3.1 | Backend list page | done | 411955d |
 | 3 | 3.2 | ActivityTimeline widget component | done | ba2851e |
 | 3 | 3.3 | Widget injection table | done | 5f99dbd |
-| 4 | 4.1 | i18n translations (en.json) | todo | — |
+| 4 | 4.1 | i18n translations (en.json) | done | pending |
 | 4 | 4.2 | Unit tests for validators + lifecycle state machine | todo | — |
 
 ## Goal
