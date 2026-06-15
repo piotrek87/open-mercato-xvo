@@ -1,4 +1,4 @@
-import { Entity, PrimaryKey, Property, Index } from '@mikro-orm/decorators/legacy'
+import { Entity, PrimaryKey, Property, Index, Unique } from '@mikro-orm/decorators/legacy'
 
 // Note: A partial unique index on (external_id, external_provider, organization_id) WHERE external_id IS NOT NULL
 // must be added manually to the migration SQL — MikroORM decorators do not support partial indexes.
@@ -105,4 +105,38 @@ export class Activity {
 
   @Property({ name: 'updated_at', type: Date, onCreate: () => new Date(), onUpdate: () => new Date() })
   updatedAt: Date = new Date()
+}
+
+@Entity({ tableName: 'activity_links' })
+@Index({ name: 'activity_links_activity_idx', properties: ['activityId'] })
+@Index({ name: 'activity_links_entity_idx', properties: ['entityType', 'entityId', 'organizationId'] })
+@Index({ name: 'activity_links_timeline_idx', properties: ['organizationId', 'entityType', 'entityId', 'createdAt'] })
+@Unique({ name: 'activity_links_unique_entity', properties: ['activityId', 'entityType', 'entityId'] })
+export class ActivityLink {
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'activity_id', type: 'uuid' })
+  activityId!: string
+
+  @Property({ name: 'entity_type', type: 'varchar', length: 100 })
+  entityType!: string
+
+  @Property({ name: 'entity_id', type: 'uuid' })
+  entityId!: string
+
+  @Property({ name: 'is_primary', type: 'boolean', default: false })
+  isPrimary: boolean = false
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'created_by_user_id', type: 'uuid', nullable: true })
+  createdByUserId?: string | null
 }
