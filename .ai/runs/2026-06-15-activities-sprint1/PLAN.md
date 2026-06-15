@@ -22,7 +22,7 @@
 | 3 | 3.2 | ActivityTimeline widget component | done | ba2851e |
 | 3 | 3.3 | Widget injection table | done | 5f99dbd |
 | 4 | 4.1 | i18n translations (en.json) | done | ea6bdf1 |
-| 4 | 4.2 | Unit tests for validators + lifecycle state machine | done | — |
+| 4 | 4.2 | Unit tests for validators + lifecycle state machine | done | e3d472e |
 
 ## Goal
 
