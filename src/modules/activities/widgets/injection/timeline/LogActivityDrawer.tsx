@@ -85,10 +85,7 @@ function resolveDefaults(typeDef: ActivityTypeDefinition): Partial<ActivityFormD
   }
 }
 
-function parseParticipants(raw?: string): { email: string }[] {
-  if (!raw?.trim()) return []
-  return raw.split(',').map(e => e.trim()).filter(Boolean).map(email => ({ email }))
-}
+import { parseParticipants } from './utils'
 
 function extractFieldErrors(err: unknown): Record<string, string[]> | null {
   if (err && typeof err === 'object' && 'fieldErrors' in err) {

@@ -24,11 +24,7 @@ interface QuickNoteDialogProps {
   onNoteCreated?: (activity: ActivityResponseDto) => void
 }
 
-function deriveSubjectAndNotes(text: string): { subject: string; notes: string | null } {
-  const trimmed = text.trim()
-  if (trimmed.length <= 100) return { subject: trimmed, notes: null }
-  return { subject: trimmed.slice(0, 97) + '…', notes: trimmed }
-}
+import { deriveSubjectAndNotes } from './utils'
 
 export default function QuickNoteDialog({
   open,

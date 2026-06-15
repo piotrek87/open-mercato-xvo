@@ -18,10 +18,7 @@ interface InlineActivityComposerProps {
   onOpenDrawer: (typeId: string) => void
 }
 
-function isInlineType(typeDef: ActivityTypeDefinition | undefined): boolean {
-  if (!typeDef) return false
-  return typeDef.lifecycleMode === 'fact' && !!typeDef.capabilities.hasBody
-}
+import { isInlineType } from './utils'
 
 export default function InlineActivityComposer({
   entityType,

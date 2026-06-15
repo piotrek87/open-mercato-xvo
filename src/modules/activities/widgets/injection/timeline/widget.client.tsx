@@ -14,11 +14,7 @@ import ActivityFilterBar from './ActivityFilterBar'
 import InlineActivityComposer from './InlineActivityComposer'
 import LogActivityDrawer from './LogActivityDrawer'
 import type { ActivityResponseDto } from './LogActivityDrawer'
-
-type OptimisticActivity = ActivityCardData & {
-  _isOptimistic?: true
-  _tempId?: string
-}
+import { mergeWithFresh, type OptimisticActivity } from './utils'
 
 type ActivitiesResponse = {
   data?: ActivityCardData[]
@@ -49,15 +45,6 @@ function dtoToCardData(dto: ActivityResponseDto): ActivityCardData {
     createdAt: String(dto.createdAt ?? ''),
     ownerUserId: (dto.ownerUserId as string | null | undefined) ?? null,
   }
-}
-
-function mergeWithFresh(
-  current: OptimisticActivity[],
-  fresh: ActivityCardData[],
-): OptimisticActivity[] {
-  const freshIds = new Set(fresh.map((a) => a.id))
-  const optimistic = current.filter((a) => a._isOptimistic && !freshIds.has(a.id))
-  return [...optimistic, ...fresh]
 }
 
 export default function ActivityTimelineWidget({ context }: InjectionWidgetComponentProps) {
