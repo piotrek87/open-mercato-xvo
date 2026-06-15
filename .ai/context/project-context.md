@@ -1,7 +1,7 @@
 # Project Context — my-app (OpenMercato)
 
 **Last updated:** 2026-06-15
-**Sessions:** Sprint 1–3A Activity Module implementation
+**Sessions:** Sprint 1–3B Activity Module implementation
 
 ---
 
@@ -25,7 +25,7 @@
 - Sprint 1 of the Activity Module is **fully implemented and deployed** on branch `feat/activities-sprint1` (migrated, auth synced, encryption seeded)
 - Sprint 2 is **fully implemented** on branch `feat/activities-sprint2` (migrated, 54 tests passing)
 - Sprint 3A is **fully implemented** on branch `feat/activities-sprint3a` (89 tests passing, 0 TS errors — no migration, pure UI + API fix)
-- Sprint 3B (dictionary-backed types) is **specified — deferred after Sprint 3A merge**
+- Sprint 3B is **fully implemented** on branch `feat/activities-sprint3b` (119 tests passing, 0 TS errors)
 - No O365 integration yet (Sprint 4+)
 
 ---
@@ -256,19 +256,27 @@ After Sprint 8, Activity replaces CustomerInteraction entirely. Until then, both
 
 ### Sprint 3B — Dictionary-backed Activity Types (Layer 3)
 
-**Status: SPECIFIED — deferred after Sprint 3A**
+**Status: IMPLEMENTED**
+**Branch:** `feat/activities-sprint3b` (from `feat/activities-sprint3a`)
 **Spec:** `.ai/specs/2026-06-15-sprint3-activity-technical-spec.md` §9
-**Hard dependency:** Sprint 3A implemented first.
+**Tests:** 119/119 green. Typecheck: 0 errors.
 
-**Scope:**
+**Delivered:**
 
 | Area | Deliverable |
 |---|---|
-| `ActivityTypeDefinitionRecord` entity | New table `activity_type_definitions`, migration |
-| Layer 3 CRUD API | `/api/activity-type-definitions` — 4 endpoints |
-| Runtime merge | `GET /api/activity-types` merges L1+L2+L3 from DB with cache TTL 60s |
-| RBAC | `activities.manage_types` feature, admin UI |
-| Admin settings page | `/backend/activities/settings/types` — DataTable + Dialog CRUD |
+| `ActivityTypeDefinitionRecord` entity | `data/entities.ts`, table `activity_type_definitions`, auto-generated migration |
+| Layer 3 CRUD API | `GET+POST /api/activity-type-definitions`, `GET+PATCH+DELETE /api/activity-type-definitions/[id]` |
+| Runtime merge | `GET /api/activity-types` merges L1+L2+L3; `includeInactive=true` for timeline rendering |
+| Cache | Tag-based invalidation `activity_type_defs:<tenantId>:<orgId>` on POST/PATCH/DELETE |
+| RBAC | `activities.manage_types` → admin + superadmin |
+| Admin settings page | `/backend/activities/settings/types` — DataTable + Create/Edit Dialog, Cmd+Enter submit |
+| Tests | 30 unit tests in `__tests__/sprint3b.test.ts` — schema, merge logic, L1 guard |
+| i18n | 40+ new keys |
+
+**Deployment checklist:**
+- [ ] `yarn db:migrate` — applies `Migration20260615183513_activities.ts`
+- [ ] `yarn mercato auth sync-role-acls` — grants `activities.manage_types` to existing tenants
 
 ---
 
@@ -300,26 +308,18 @@ After Sprint 8, Activity replaces CustomerInteraction entirely. Until then, both
 
 ## Next Session Starting Point
 
-### Sprint 3B — Dictionary-backed Activity Types
+### Sprint 4 — O365 Integration
 
-Before implementing Sprint 3B, read:
+Before implementing Sprint 4, read:
 ```
-1. .ai/context/project-context.md                             ← this file
-2. .ai/specs/2026-06-15-sprint3-activity-technical-spec.md    ← Sprint 3B scope (§9)
-3. src/modules/activities/activity-types.ts                   ← L1 registry (to extend with L3 merge)
-4. src/modules/activities/api/activity-types/route.ts         ← GET /api/activity-types (to add L3 merge)
+1. .ai/context/project-context.md               ← this file
+2. .ai/specs/2026-06-15-office365-integration.md ← O365 architecture spec (final)
+3. .ai/guides/core.integrations.md               ← integration provider pattern
 ```
 
-**Sprint 3B deliverables:**
-| Area | Deliverable |
-|---|---|
-| `ActivityTypeDefinitionRecord` entity | New table `activity_type_definitions`, migration |
-| Layer 3 CRUD API | `/api/activity-type-definitions` — list, create, update, delete |
-| Runtime merge | `GET /api/activity-types` merges L1+L2+L3 from DB, TTL 60s cache |
-| RBAC | `activities.manage_types` feature in `acl.ts` + `setup.ts` |
-| Admin settings page | `/backend/activities/settings/types` — DataTable + CrudForm |
+**Decide before Sprint 4:** O365 calendar event ownership — when a synced event has multiple staff attendees, which one becomes `ownerUserId`? (Open Question #1)
 
-### Closed decisions (Sprint 1–3A) — do not re-open
+### Closed decisions (Sprint 1–3B) — do not re-open
 
 | Decision | Answer | Where documented |
 |---|---|---|
@@ -327,9 +327,11 @@ Before implementing Sprint 3B, read:
 | ActivityLink: junction table or second FK pair? | Junction table `activity_links` | Decision #10 |
 | ActivityLink: stays in Activities or generic module? | Stays in Activities module | Decision #10 |
 | Build-time vs runtime registry (Sprint 2)? | Build-time generated file. Runtime in Sprint 3B. | Sprint 2 spec §1.5 |
-| Dictionary-backed types (Layer 3)? | Sprint 3B | Sprint 3A spec scope |
+| Dictionary-backed types (Layer 3)? | Sprint 3B — DONE | Sprint 3A spec scope |
 | Drawer vs Sheet for full form? | `Drawer` from `@open-mercato/ui/primitives/drawer` | Sprint 3A spec |
 | react-hook-form resolvers? | Manual Zod `safeParse()` — `@hookform/resolvers` not installed | Sprint 3A impl |
+| L3 inactive types in timeline? | `GET /api/activity-types?includeInactive=true` for rendering | Sprint 3B impl |
+| Cache invalidation strategy? | Tag-based `activity_type_defs:<tenantId>:<orgId>` on every write | Sprint 3B impl |
 
 ---
 
