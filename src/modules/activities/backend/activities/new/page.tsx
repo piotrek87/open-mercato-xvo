@@ -4,7 +4,7 @@ import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { CrudForm, type CrudField, type CrudFormGroup } from '@open-mercato/ui/backend/CrudForm'
 import { apiCallOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { activityTypes } from '../../activity-types'
+import { activityTypes } from '../../../activity-types'
 
 const LIFECYCLE_BY_TYPE: Record<string, 'fact' | 'task'> = Object.fromEntries(
   activityTypes.map((tp) => [tp.id, tp.lifecycleMode]),
