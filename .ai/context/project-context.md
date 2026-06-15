@@ -222,26 +222,48 @@ After Sprint 8, Activity replaces CustomerInteraction entirely. Until then, both
 
 ---
 
-### Sprint 3 — Activity Creation UX
+### Sprint 3A — Activity Creation UX
 
 **Status: SPECIFIED & APPROVED — ready to implement**
-**Branch:** to create from `feat/activities-sprint2`
-**Spec:** `.ai/specs/2026-06-15-sprint3-activity-technical-spec.md`
+**Branch:** `feat/activities-sprint3a` (from `feat/activities-sprint2`)
+**Spec:** `.ai/specs/2026-06-15-sprint3a-activity-technical-spec.md`
 **Hard dependency:** Sprint 2 must be deployed and migrated first.
+**No DB migration** — pure UI + small API fix.
 
 **Scope:**
 
 | Area | Deliverable |
 |---|---|
-| Quick-log flow | `InlineActivityComposer` — inline note + Drawer trigger for other types |
-| Full-form Drawer | `LogActivityDrawer` (Sheet side=right), `ActivityTypePicker`, `ActivityFormFields` |
-| Dynamic Form Architecture | capabilities-driven field visibility, react-hook-form + Zod |
-| Activity Creation Context | pre-fill entityType/entityId from timeline context; standalone `/backend/activities/new` |
-| Layer 3 (dictionary-backed types) | `activity_type_definitions` table, CRUD API + admin UI |
-| Optimistic updates | placeholder card in timeline, error recovery |
-| API extensions | POST returns full DTO; activity-types endpoint merges L3 from DB |
+| `defaultValues` in ActivityTypeDefinition | Per-type form defaults (occurredAt: 'now', dueAt: 'end_of_day') |
+| POST `/api/activities` full DTO | Response includes `links: []` for optimistic update |
+| `ActivityTypePicker` | Type selection buttons with icon + label, RBAC filter |
+| `ActivityFormFields` | Capabilities-driven field renderer (react-hook-form + Zod) |
+| `LogActivityDrawer` | Sheet side=right, TypePicker + Fields, pre-fill context, Cmd+Enter |
+| `QuickNoteDialog` | Dialog for fast note entry, 2 fields |
+| `InlineActivityComposer` | Inline textarea for note, Drawer trigger for other types |
+| Optimistic updates | Placeholder card in timeline, error recovery, deduplication |
+| `/backend/activities/new` | Standalone creation page (CrudForm) |
+| Tests + i18n | Unit: field visibility logic; Sprint 3A i18n keys |
 
-**Out of scope Sprint 3:** edit activity, completion notifications, bulk actions, O365 sync.
+**Out of scope 3A:** Layer 3 (dictionary-backed types), edit activity, notifications, bulk actions.
+
+---
+
+### Sprint 3B — Dictionary-backed Activity Types (Layer 3)
+
+**Status: SPECIFIED — deferred after Sprint 3A**
+**Spec:** `.ai/specs/2026-06-15-sprint3-activity-technical-spec.md` §9
+**Hard dependency:** Sprint 3A implemented first.
+
+**Scope:**
+
+| Area | Deliverable |
+|---|---|
+| `ActivityTypeDefinitionRecord` entity | New table `activity_type_definitions`, migration |
+| Layer 3 CRUD API | `/api/activity-type-definitions` — 4 endpoints |
+| Runtime merge | `GET /api/activity-types` merges L1+L2+L3 from DB with cache TTL 60s |
+| RBAC | `activities.manage_types` feature, admin UI |
+| Admin settings page | `/backend/activities/settings/types` — DataTable + Dialog CRUD |
 
 ---
 
@@ -249,7 +271,8 @@ After Sprint 8, Activity replaces CustomerInteraction entirely. Until then, both
 
 | Sprint | Scope | Key deliverables |
 |---|---|---|
-| **Sprint 3** | Activity creation UX | "Log Activity" modal/drawer, quick-log from timeline, full-text search integration, dictionary-backed types (Layer 3) |
+| **Sprint 3A** | Activity creation UX | `LogActivityDrawer`, `InlineActivityComposer`, quick-log, optimistic updates, standalone page |
+| **Sprint 3B** | Dictionary-backed types | `activity_type_definitions` table, Layer 3 registry merge, admin CRUD UI |
 | **Sprint 4** | O365 Integration | `integrations_o365` module, per-user OAuth2 flow, email sync (inbound Graph API), calendar sync (bidirectional) |
 | **Sprint 5** | Gmail Integration | Per-user OAuth2, Gmail API, email sync |
 | **Sprint 6** | Activity automation | Workflow triggers on activity events, auto-create activities from sales events |
@@ -272,41 +295,30 @@ After Sprint 8, Activity replaces CustomerInteraction entirely. Until then, both
 
 ## Next Session Starting Point
 
-### Prerequisite: Sprint 1 deployment
-
-Before any Sprint 2 work begins, verify Sprint 1 is deployed:
-
-```bash
-rtk git status                          # confirm on feat/activities-sprint1 or main
-rtk git log --oneline -5                # confirm d487588 is present
-# If not yet deployed, run the Sprint 1 deployment checklist above
-```
-
-### Step 1: Read before writing any code
-
-Load these files in this order — do not skip:
+### Read before writing any code (Sprint 3A)
 
 ```
-1. .ai/context/project-context.md             ← this file (already done)
-2. .ai/specs/2026-06-15-sprint2-activity-technical-spec.md   ← implementation source of truth
-3. src/modules/activities/data/entities.ts    ← current Activity entity (before adding ActivityLink)
-4. src/modules/activities/activity-types.ts   ← current static registry (Sprint 1)
+1. .ai/context/project-context.md                          ← this file
+2. .ai/specs/2026-06-15-sprint3a-activity-technical-spec.md ← Sprint 3A source of truth
+3. src/modules/activities/activity-types.ts                 ← add defaultValues
+4. src/modules/activities/api/route.ts                      ← fix POST response DTO
+5. src/modules/activities/widgets/injection/timeline/widget.client.tsx ← mount new components
 ```
 
-Do NOT scan the full `src/` tree. These 4 files are sufficient context.
+### Sprint 3A implementation order
 
-### Step 2: Suggested implementation order
-
-Follow Appendix B of the Sprint 2 tech spec exactly:
-
-| Step | Task | Notes |
-|---|---|---|
-| 1 | Generator extension | Add `activity-types.ts` scan target; output `activity-types.generated.ts`; validate on duplicate IDs |
-| 2 | `ActivityTypeDefinition` type | Full shape with capabilities, actions, RBAC fields — replace Sprint 1 partial definition |
-| 3 | ActivityLink migration (schema) | New table + indexes + constraints — run `yarn db:generate` to verify SQL |
-| 4 | ActivityLink migration (data) | Backfill from existing `linked_entity_type/id` — idempotent INSERT SELECT |
-| 5 | ActivityLink CRUD API | 4 endpoints: GET list, POST create, PATCH update, DELETE |
-| 6 | Registry endpoint | `GET /api/activity-types` with RBAC filter |
+| Step | Task |
+|---|---|
+| 1 | `defaultValues` in `ActivityTypeDefinition` + update 5 built-in types |
+| 2 | POST `/api/activities` → full response DTO with `links: []` |
+| 3 | `ActivityTypePicker` component |
+| 4 | `ActivityFormFields` — capabilities-driven renderer |
+| 5 | `LogActivityDrawer` (Sheet + TypePicker + Fields) |
+| 6 | `QuickNoteDialog` |
+| 7 | `InlineActivityComposer` |
+| 8 | Optimistic update logic in `widget.client.tsx` |
+| 9 | `/backend/activities/new` standalone page |
+| 10 | Tests + i18n |
 | 7 | Updated `GET /api/activities/:id` | Embed `links: []` in response |
 | 8 | `includeLinked` query param | OR EXISTS path for timeline queries |
 | 9 | `activity-types.client.ts` | Lazy renderer architecture; generated merge file |
