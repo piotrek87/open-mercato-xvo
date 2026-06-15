@@ -221,7 +221,7 @@ export async function GET(request: Request) {
     const nextCursor = hasMore && items.length > 0 ? encodeCursor(items[items.length - 1]) : null
 
     return NextResponse.json({
-      data: items.map(mapActivityToResponse),
+      data: items.map((a) => mapActivityToResponse(a)),
       hasMore,
       nextCursor,
     })

@@ -139,7 +139,8 @@ export async function POST(
           entityId: parsed.entityId,
           isPrimary: parsed.isPrimary,
           organizationId: auth.orgId ?? activity.organizationId,
-          tenantId: auth.tenantId,
+          tenantId: auth.tenantId!,
+          createdAt: new Date(),
           createdByUserId: auth.sub,
         })
 

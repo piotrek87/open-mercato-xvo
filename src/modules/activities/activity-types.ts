@@ -93,6 +93,8 @@ export const activityTypes: ActivityTypeDefinition[] = [
   },
 ]
 
+export default activityTypes
+
 export function getAllActivityTypes(): ActivityTypeDefinition[] {
   return activityTypes
 }

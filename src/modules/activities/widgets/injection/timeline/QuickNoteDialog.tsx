@@ -78,7 +78,7 @@ export default function QuickNoteDialog({
         }),
       })
 
-      onNoteCreated?.(response.data)
+      onNoteCreated?.(response.result!.data)
       onOpenChange(false)
       flash(t('activities.create.success', 'Activity logged'), 'success')
     } catch {

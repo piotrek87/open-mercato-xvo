@@ -193,7 +193,7 @@ export default function LogActivityDrawer({
         body: JSON.stringify(result.data),
       })
 
-      onActivityCreated?.(response.data)
+      onActivityCreated?.(response.result!.data)
       onOpenChange(false)
       flash(t('activities.create.success', 'Activity logged'), 'success')
     } catch (err) {

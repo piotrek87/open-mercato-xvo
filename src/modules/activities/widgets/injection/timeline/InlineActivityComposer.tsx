@@ -89,7 +89,7 @@ export default function InlineActivityComposer({
           linkedEntityId: entityId,
         }),
       })
-      onActivitySaved(tempId, response.data)
+      onActivitySaved(tempId, response.result!.data)
     } catch {
       onActivityFailed(tempId)
       setText(trimmed)  // restore text
