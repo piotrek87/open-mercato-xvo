@@ -1,7 +1,7 @@
 # Project Context — my-app (OpenMercato)
 
 **Last updated:** 2026-06-15
-**Sessions:** Sprint 1 Activity Module implementation + Sprint 2 specification & architectural decisions
+**Sessions:** Sprint 1–3A Activity Module implementation
 
 ---
 
@@ -24,7 +24,8 @@
 - Classic-mode OpenMercato scaffold with all built-in modules enabled (customers, sales, catalog, auth, integrations, etc.)
 - Sprint 1 of the Activity Module is **fully implemented and deployed** on branch `feat/activities-sprint1` (migrated, auth synced, encryption seeded)
 - Sprint 2 is **fully implemented** on branch `feat/activities-sprint2` (migrated, 54 tests passing)
-- Sprint 3 is **specified and approved** — ready to implement
+- Sprint 3A is **fully implemented** on branch `feat/activities-sprint3a` (89 tests passing, 0 TS errors — no migration, pure UI + API fix)
+- Sprint 3B (dictionary-backed types) is **specified — deferred after Sprint 3A merge**
 - No O365 integration yet (Sprint 4+)
 
 ---
@@ -150,7 +151,8 @@ After Sprint 8, Activity replaces CustomerInteraction entirely. Until then, both
 | Path | Description | Status |
 |---|---|---|
 | `.ai/specs/2026-06-15-sprint1-activity-technical-spec.md` | Sprint 1 tech spec — data model (28 cols), API contracts, RBAC, events, migration, 8 risks | Implemented |
-| `.ai/specs/2026-06-15-sprint2-activity-technical-spec.md` | Sprint 2 tech spec — dynamic registry, ActivityLink entity, type extensibility, API contracts, UI architecture, 7 risks | Approved |
+| `.ai/specs/2026-06-15-sprint2-activity-technical-spec.md` | Sprint 2 tech spec — dynamic registry, ActivityLink entity, type extensibility, API contracts, UI architecture, 7 risks | Implemented |
+| `.ai/specs/2026-06-15-sprint3a-activity-technical-spec.md` | Sprint 3A tech spec — Activity Creation UX (Drawer, InlineComposer, QuickNote, optimistic updates, standalone page) | Implemented |
 
 ### Templates and Conventions
 
@@ -224,28 +226,29 @@ After Sprint 8, Activity replaces CustomerInteraction entirely. Until then, both
 
 ### Sprint 3A — Activity Creation UX
 
-**Status: SPECIFIED & APPROVED — ready to implement**
+**Status: IMPLEMENTED**
 **Branch:** `feat/activities-sprint3a` (from `feat/activities-sprint2`)
 **Spec:** `.ai/specs/2026-06-15-sprint3a-activity-technical-spec.md`
-**Hard dependency:** Sprint 2 must be deployed and migrated first.
-**No DB migration** — pure UI + small API fix.
+**Tests:** 89/89 green. Typecheck: 0 errors. No DB migration.
 
-**Scope:**
+**Delivered:**
 
 | Area | Deliverable |
 |---|---|
-| `defaultValues` in ActivityTypeDefinition | Per-type form defaults (occurredAt: 'now', dueAt: 'end_of_day') |
-| POST `/api/activities` full DTO | Response includes `links: []` for optimistic update |
-| `ActivityTypePicker` | Type selection buttons with icon + label, RBAC filter |
-| `ActivityFormFields` | Capabilities-driven field renderer (react-hook-form + Zod) |
-| `LogActivityDrawer` | Sheet side=right, TypePicker + Fields, pre-fill context, Cmd+Enter |
-| `QuickNoteDialog` | Dialog for fast note entry, 2 fields |
-| `InlineActivityComposer` | Inline textarea for note, Drawer trigger for other types |
-| Optimistic updates | Placeholder card in timeline, error recovery, deduplication |
-| `/backend/activities/new` | Standalone creation page (CrudForm) |
-| Tests + i18n | Unit: field visibility logic; Sprint 3A i18n keys |
+| `defaultValues` in ActivityTypeDefinition | Per-type form defaults (`occurredAt: 'now'`, `dueAt: 'end_of_day'`, `durationMinutes`) |
+| POST `/api/activities` full DTO | Response includes full activity object + `links: []` |
+| `ActivityTypePicker` | Type selection buttons with Lucide icon, ARIA pressed state |
+| `ActivityFormFields` | Capabilities-driven field renderer (react-hook-form, plain HTML inputs) |
+| `LogActivityDrawer` | Drawer side=right, TypePicker + Fields, pre-fill defaults, Cmd+Enter |
+| `QuickNoteDialog` | Dialog for fast note, auto-focus, Cmd+Enter |
+| `InlineActivityComposer` | Inline textarea for note/email types, Drawer trigger for task types |
+| `utils.ts` | Extracted pure functions: `deriveSubjectAndNotes`, `parseParticipants`, `isInlineType`, `mergeWithFresh` |
+| Optimistic updates | Placeholder card, `mergeWithFresh` deduplication, error recovery |
+| `/backend/activities/new` | Standalone CrudForm page with `datetime` pickers |
+| i18n | 40+ new keys for all Sprint 3A components |
+| Tests | 35 unit tests in `__tests__/sprint3a.test.ts` |
 
-**Out of scope 3A:** Layer 3 (dictionary-backed types), edit activity, notifications, bulk actions.
+**Fixes in Sprint 3A:** `@app/modules/*` tsconfig alias, `mapActivityToResponse` in `.map()`, `activity-types.ts` default export, `ActivityLink.createdAt` in `em.create()`.
 
 ---
 
@@ -295,55 +298,36 @@ After Sprint 8, Activity replaces CustomerInteraction entirely. Until then, both
 
 ## Next Session Starting Point
 
-### Read before writing any code (Sprint 3A)
+### Sprint 3B — Dictionary-backed Activity Types
 
+Before implementing Sprint 3B, read:
 ```
-1. .ai/context/project-context.md                          ← this file
-2. .ai/specs/2026-06-15-sprint3a-activity-technical-spec.md ← Sprint 3A source of truth
-3. src/modules/activities/activity-types.ts                 ← add defaultValues
-4. src/modules/activities/api/route.ts                      ← fix POST response DTO
-5. src/modules/activities/widgets/injection/timeline/widget.client.tsx ← mount new components
+1. .ai/context/project-context.md                             ← this file
+2. .ai/specs/2026-06-15-sprint3-activity-technical-spec.md    ← Sprint 3B scope (§9)
+3. src/modules/activities/activity-types.ts                   ← L1 registry (to extend with L3 merge)
+4. src/modules/activities/api/activity-types/route.ts         ← GET /api/activity-types (to add L3 merge)
 ```
 
-### Sprint 3A implementation order
-
-| Step | Task |
+**Sprint 3B deliverables:**
+| Area | Deliverable |
 |---|---|
-| 1 | `defaultValues` in `ActivityTypeDefinition` + update 5 built-in types |
-| 2 | POST `/api/activities` → full response DTO with `links: []` |
-| 3 | `ActivityTypePicker` component |
-| 4 | `ActivityFormFields` — capabilities-driven renderer |
-| 5 | `LogActivityDrawer` (Sheet + TypePicker + Fields) |
-| 6 | `QuickNoteDialog` |
-| 7 | `InlineActivityComposer` |
-| 8 | Optimistic update logic in `widget.client.tsx` |
-| 9 | `/backend/activities/new` standalone page |
-| 10 | Tests + i18n |
-| 7 | Updated `GET /api/activities/:id` | Embed `links: []` in response |
-| 8 | `includeLinked` query param | OR EXISTS path for timeline queries |
-| 9 | `activity-types.client.ts` | Lazy renderer architecture; generated merge file |
-| 10 | UI: lazy renderer loading | Suspense + DefaultActivityCard fallback in timeline widget |
-| 11 | UI: dynamic filter bar | Generated from registry, RBAC-filtered, URL state |
-| 12 | Tests | Unit tests for registry lookup, ActivityLink validators, timeline query paths |
-| 13 | i18n | Any new keys for Sprint 2 UI |
+| `ActivityTypeDefinitionRecord` entity | New table `activity_type_definitions`, migration |
+| Layer 3 CRUD API | `/api/activity-type-definitions` — list, create, update, delete |
+| Runtime merge | `GET /api/activity-types` merges L1+L2+L3 from DB, TTL 60s cache |
+| RBAC | `activities.manage_types` feature in `acl.ts` + `setup.ts` |
+| Admin settings page | `/backend/activities/settings/types` — DataTable + CrudForm |
 
-Commit after each logical step (not all at end). Use `/om-auto-create-pr-loop` skill for autonomous execution.
-
-### Step 3: Closed decisions — do not re-open
-
-The following were explicitly decided and must not be re-analyzed in Sprint 2:
+### Closed decisions (Sprint 1–3A) — do not re-open
 
 | Decision | Answer | Where documented |
 |---|---|---|
-| ActivityLink: junction table or second FK pair? | Junction table `activity_links` | Decision #10, Sprint 2 spec §2 |
+| Activity unified table vs sub-tables | Unified table | Decision #1 |
+| ActivityLink: junction table or second FK pair? | Junction table `activity_links` | Decision #10 |
 | ActivityLink: stays in Activities or generic module? | Stays in Activities module | Decision #10 |
-| Keep `Activity.linked_entity_type/id` columns? | Yes — backward compat, denormalized primary | Sprint 2 spec §2.3 |
-| Build-time vs runtime registry? | Build-time only (Sprint 2). No runtime registration API. | Sprint 2 spec §1.5 |
-| Dictionary-backed types (Layer 3)? | Deferred to Sprint 3 | Sprint 2 spec scope |
-| Custom fields UI? | Out of scope Sprint 2 | Sprint 2 spec scope |
-| Bulk actions? | Out of scope Sprint 2 | Sprint 2 spec scope |
-| Renderer per type: lazy import or eager? | Lazy import (React.lazy + Suspense) | Sprint 2 spec §5.2 |
-| Timeline query for multi-link: OR EXISTS or UNION? | OR EXISTS for Sprint 2 — UNION is Sprint 3 option if needed | Sprint 2 spec §2.5 + R-3 |
+| Build-time vs runtime registry (Sprint 2)? | Build-time generated file. Runtime in Sprint 3B. | Sprint 2 spec §1.5 |
+| Dictionary-backed types (Layer 3)? | Sprint 3B | Sprint 3A spec scope |
+| Drawer vs Sheet for full form? | `Drawer` from `@open-mercato/ui/primitives/drawer` | Sprint 3A spec |
+| react-hook-form resolvers? | Manual Zod `safeParse()` — `@hookform/resolvers` not installed | Sprint 3A impl |
 
 ---
 
