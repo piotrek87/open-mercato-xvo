@@ -8,7 +8,7 @@ import { validateCrudMutationGuard, runCrudMutationGuardAfterSuccess } from '@op
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
-import { Activity } from '../data/entities'
+import { Activity, ActivityLink } from '../data/entities'
 import { activityCreateSchema } from '../data/validators'
 import { eventsConfig } from '../events'
 import { buildActivitiesCrudOpenApi, activityCreatedSchema } from './openapi'
@@ -32,6 +32,7 @@ function decodeCursor(cursor: string): { id: string; createdAt: string } | null 
 const listQuerySchema = z.object({
   entityType: z.string().optional(),
   entityId: z.string().uuid().optional(),
+  includeLinked: z.enum(['true', 'false']).optional().default('false'),
   activityType: z.string().optional(),
   lifecycleMode: z.enum(['fact', 'task']).optional(),
   status: z.string().optional(),
@@ -116,8 +117,37 @@ export async function GET(request: Request) {
       where['organizationId'] = orgId
     }
 
-    if (query.entityType) where['linkedEntityType'] = query.entityType
-    if (query.entityId) where['linkedEntityId'] = query.entityId
+    // Primary link filter OR secondary links (includeLinked=true)
+    if (query.entityType && query.entityId) {
+      if (query.includeLinked === 'true') {
+        // Collect activity IDs from activity_links (secondary links)
+        const linkedLinks = await em.find(ActivityLink, {
+          entityType: query.entityType,
+          entityId: query.entityId,
+          organizationId: orgId ?? undefined,
+          tenantId: auth.tenantId,
+        }, { fields: ['activityId'] })
+        const linkedIds = linkedLinks.map((l) => l.activityId)
+
+        // OR: primary link match OR id in linked set
+        const orClauses: Record<string, unknown>[] = [
+          { linkedEntityType: query.entityType, linkedEntityId: query.entityId },
+        ]
+        if (linkedIds.length > 0) {
+          orClauses.push({ id: { $in: linkedIds } })
+        }
+        where['$or'] = [
+          ...(Array.isArray(where['$or']) ? where['$or'] : []),
+          ...orClauses,
+        ]
+      } else {
+        where['linkedEntityType'] = query.entityType
+        where['linkedEntityId'] = query.entityId
+      }
+    } else {
+      if (query.entityType) where['linkedEntityType'] = query.entityType
+      if (query.entityId) where['linkedEntityId'] = query.entityId
+    }
     if (query.activityType) where['activityType'] = query.activityType
     if (query.lifecycleMode) where['lifecycleMode'] = query.lifecycleMode
     if (query.status) where['status'] = query.status

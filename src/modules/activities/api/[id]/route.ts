@@ -8,14 +8,14 @@ import { validateCrudMutationGuard, runCrudMutationGuardAfterSuccess } from '@op
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
-import { Activity } from '../../data/entities'
+import { Activity, ActivityLink } from '../../data/entities'
 import { activityUpdateSchema } from '../../data/validators'
 import { eventsConfig } from '../../events'
 import { activityOkSchema } from '../openapi'
 
 // --- Response DTO (duplicated from ../route.ts — cannot import between Next.js route files) ---
 
-function mapActivityToResponse(a: Activity) {
+function mapActivityToResponse(a: Activity, links: ActivityLink[] = []) {
   return {
     id: a.id,
     activityType: a.activityType,
@@ -47,6 +47,12 @@ function mapActivityToResponse(a: Activity) {
     createdAt: a.createdAt.toISOString(),
     updatedAt: a.updatedAt.toISOString(),
     customFields: {},
+    links: links.map((l) => ({
+      id: l.id,
+      entityType: l.entityType,
+      entityId: l.entityId,
+      isPrimary: l.isPrimary,
+    })),
   }
 }
 
@@ -104,7 +110,12 @@ export async function GET(
       return NextResponse.json({ error: 'Not found' }, { status: 404 })
     }
 
-    return NextResponse.json(mapActivityToResponse(activity))
+    const links = await em.find(ActivityLink, {
+      activityId: params.id,
+      organizationId: auth.orgId ?? activity.organizationId,
+    }, { orderBy: { createdAt: 'ASC' } })
+
+    return NextResponse.json(mapActivityToResponse(activity, links))
   } catch (error) {
     console.error('activities.get failed', error)
     return NextResponse.json({ error: 'Failed to get activity' }, { status: 500 })
