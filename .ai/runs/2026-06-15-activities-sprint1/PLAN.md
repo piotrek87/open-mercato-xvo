@@ -15,7 +15,7 @@
 | 1 | 1.3 | Entity + validators | done | f8dd62b |
 | 1 | 1.4 | Migration file | done | c96af11 |
 | 1 | 1.5 | Register in src/modules.ts + yarn generate | done | 115492d |
-| 2 | 2.1 | API list + create route + openapi.ts | todo | — |
+| 2 | 2.1 | API list + create route + openapi.ts | done | TBD |
 | 2 | 2.2 | API single record routes (GET/PUT/DELETE) | todo | — |
 | 2 | 2.3 | Lifecycle routes (complete, cancel, reopen, restore) | todo | — |
 | 3 | 3.1 | Backend list page | todo | — |
