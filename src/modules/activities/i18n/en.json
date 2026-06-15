@@ -42,5 +42,43 @@
   "activities.widget.logActivity": "Log Activity",
   "activities.widget.viewAll": "View all activities",
   "activities.widget.empty.title": "No activities",
-  "activities.widget.empty.description": "No activities have been logged for this record yet."
+  "activities.widget.empty.description": "No activities have been logged for this record yet.",
+
+  "activities.types.email": "Email",
+  "activities.types.meeting": "Meeting",
+  "activities.types.call": "Call",
+  "activities.types.note": "Note",
+  "activities.types.task": "Task",
+
+  "activities.filter.label": "Filter by type",
+  "activities.filter.all": "All",
+
+  "activities.card.dueAt": "Due",
+  "activities.card.occurredAt": "On",
+  "activities.card.createdAt": "Created",
+
+  "activities.timeline.title": "Activity Timeline",
+  "activities.timeline.loading": "Loading activities…",
+  "activities.timeline.error.load": "Failed to load activities",
+  "activities.timeline.empty.title": "No activities yet",
+  "activities.timeline.empty.description": "Log an activity to start tracking calls, tasks, and meetings for this record.",
+  "activities.timeline.action.log": "Log Activity",
+
+  "activities.links.entityType.label": "Linked entity type",
+  "activities.links.entityId.label": "Linked entity ID",
+  "activities.links.isPrimary.label": "Primary link",
+  "activities.links.error.duplicate": "This entity is already linked to the activity",
+  "activities.links.error.limit": "Maximum number of links reached",
+
+  "activities.list.page.title": "Activities",
+  "activities.list.column.subject": "Subject",
+  "activities.list.column.activityType": "Type",
+  "activities.list.column.status": "Status",
+  "activities.list.column.owner": "Owner",
+  "activities.list.column.dueAt": "Due date",
+  "activities.list.column.createdAt": "Created",
+  "activities.list.action.create": "New activity",
+  "activities.list.error.load": "Failed to load activities",
+  "activities.list.empty.title": "No activities yet",
+  "activities.list.empty.description": "Create your first activity to start tracking tasks, calls, and meetings."
 }
