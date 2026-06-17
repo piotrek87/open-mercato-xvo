@@ -53,6 +53,7 @@ export async function buildEmailThreadRecords(
   matchedPersonsByActivity: Map<string, string[]>,
   channelId: string,
   scope: Scope,
+  matchedCompaniesByActivity?: Map<string, string[]>,
 ): Promise<void> {
   // Only process emails that matched at least one CRM person
   const relevant = emails.filter(e => matchedPersonsByActivity.has(e.activityId))
@@ -296,6 +297,37 @@ export async function buildEmailThreadRecords(
           now,
           now,
         ])
+      }
+
+      // Company CIs — one per (email, company) pair so emails appear on the company timeline
+      if (matchedCompaniesByActivity) {
+        const companyIds = matchedCompaniesByActivity.get(e.activityId) ?? []
+        for (const companyId of companyIds) {
+          const ciKey = `${companyId}:${source}`
+          if (seenCiKeys.has(ciKey)) continue
+          seenCiKeys.add(ciKey)
+
+          ciData.push([
+            randomUUID(),
+            scope.organizationId,
+            scope.tenantId,
+            companyId,
+            'email',
+            e.subject ?? null,
+            e.bodyPreview ?? null,
+            e.occurredAt,
+            e.ownerUserId ?? null,
+            e.ownerUserId ?? null,
+            'shared',
+            'done',
+            source,
+            mclId,
+            'office365',
+            false,
+            now,
+            now,
+          ])
+        }
       }
     }
 

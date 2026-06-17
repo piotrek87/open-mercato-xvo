@@ -134,18 +134,26 @@ export async function buildEmailCustomerMap(
  *
  * Cap: up to AUTO_LINK_CAP (10) person links per activity.
  */
+export type AutoLinkResult = {
+  /** activityId → personIds[] — for all activity types */
+  persons: Map<string, string[]>
+  /** activityId → companyIds[] — companies associated with matched persons */
+  companies: Map<string, string[]>
+}
+
 /**
- * Returns Map<activityId, personIds[]> of all (activity, person) pairs that were linked.
+ * Returns AutoLinkResult with persons and companies maps for all (activity, entity) pairs linked.
  * Email CIs are NOT created here — email-thread-builder.ts creates them with externalMessageId.
- * Meeting CIs are created in Phase 3.
+ * Meeting CIs (persons + companies) are created in Phase 3.
  */
 export async function autoLinkActivityToCustomers(
   em: EntityManager,
   pairs: ActivityLinkPair[],
   emailMap: Map<string, string[]>,
   scope: Scope,
-): Promise<Map<string, string[]>> {
-  if (emailMap.size === 0 || pairs.length === 0) return new Map()
+): Promise<AutoLinkResult> {
+  const emptyResult: AutoLinkResult = { persons: new Map(), companies: new Map() }
+  if (emailMap.size === 0 || pairs.length === 0) return emptyResult
 
   const now = new Date()
   const personLinks: LinkRow[] = []
@@ -187,7 +195,7 @@ export async function autoLinkActivityToCustomers(
     }
   }
 
-  if (personLinks.length === 0) return new Map()
+  if (personLinks.length === 0) return emptyResult
 
   // Build matched-persons map for callers (e.g. email-thread-builder)
   const personsByActivity = new Map<string, string[]>()
@@ -222,7 +230,7 @@ export async function autoLinkActivityToCustomers(
       '[channel_office365] autoLinkActivityToCustomers (persons) failed:',
       err instanceof Error ? err.message : err,
     )
-    return new Map()
+    return emptyResult
   }
 
   // Phase 1b: set primary link on activities that don't have one yet.
@@ -249,6 +257,7 @@ export async function autoLinkActivityToCustomers(
   }
 
   // Phase 2: insert company links — one SQL lookup for all matched persons
+  let personToCompany = new Map<string, string>()
   try {
     const personIds = [...new Set(personLinks.map(l => l.entityId))]
 
@@ -262,7 +271,7 @@ export async function autoLinkActivityToCustomers(
     ) as Array<{ person_id: string; company_id: string }>
 
     if (rows.length > 0) {
-      const personToCompany = new Map(rows.map(r => [r.person_id, r.company_id]))
+      personToCompany = new Map(rows.map(r => [r.person_id, r.company_id]))
       const seenCompanyKeys = new Set<string>()
       const companyLinks: LinkRow[] = []
 
@@ -310,6 +319,19 @@ export async function autoLinkActivityToCustomers(
       '[channel_office365] autoLinkActivityToCustomers (companies) failed:',
       err instanceof Error ? err.message : err,
     )
+  }
+
+  // Build companiesByActivity from the resolved personToCompany map
+  const companiesByActivity = new Map<string, string[]>()
+  for (const link of personLinks) {
+    const companyId = personToCompany.get(link.entityId)
+    if (!companyId) continue
+    const existing = companiesByActivity.get(link.activityId)
+    if (existing) {
+      if (!existing.includes(companyId)) existing.push(companyId)
+    } else {
+      companiesByActivity.set(link.activityId, [companyId])
+    }
   }
 
   // Phase 3: create/update CustomerInteraction for each (activity, person) pair.
@@ -376,7 +398,39 @@ export async function autoLinkActivityToCustomers(
       })
     }
 
-    if (ciRows.length === 0) return personsByActivity
+    // Also create CIs for companies associated with matched persons (meetings only)
+    const seenCompanyCiKeys = new Set<string>()
+    for (const link of personLinks) {
+      const pair = pairByActivityId.get(link.activityId)
+      if (!pair?.externalId || !pair.interactionType || pair.interactionType === 'email') continue
+      const companyId = personToCompany.get(link.entityId)
+      if (!companyId) continue
+      const source = `office365:calendar:${pair.externalId}`
+      const ciKey = `${companyId}:${source}`
+      if (seenCompanyCiKeys.has(ciKey)) continue
+      seenCompanyCiKeys.add(ciKey)
+      const eventTime = pair.occurredAt ?? pair.dueAt ?? null
+      const status = (eventTime && eventTime <= now) ? 'done' : 'planned'
+      ciRows.push({
+        id: randomUUID(),
+        entityId: companyId,
+        interactionType: pair.interactionType,
+        title: pair.subject ?? null,
+        body: pair.notes ?? null,
+        occurredAt: eventTime,
+        ownerUserId: pair.ownerUserId ?? null,
+        visibility: 'team',
+        status,
+        source,
+        durationMinutes: pair.durationMinutes ?? null,
+        location: pair.location ?? null,
+        allDay: pair.allDay ?? false,
+        participants: pair.participants != null ? JSON.stringify(pair.participants) : null,
+        channelProviderKey: null,
+      })
+    }
+
+    if (ciRows.length === 0) return { persons: personsByActivity, companies: companiesByActivity }
 
     // Batch INSERT with ON CONFLICT DO UPDATE — refreshes title/body/time on re-sync.
     // Uses the partial unique index: (entity_id, source, organization_id)
@@ -438,5 +492,5 @@ export async function autoLinkActivityToCustomers(
     )
   }
 
-  return personsByActivity
+  return { persons: personsByActivity, companies: companiesByActivity }
 }

@@ -271,27 +271,28 @@ export async function syncChannelMail(
   if (pendingLinks.length > 0) {
     const emailMap = await buildEmailCustomerMap(em, scope)
     if (emailMap.size > 0) {
-      const matchedPersons = await autoLinkActivityToCustomers(
-        em,
-        pendingLinks.map(({ entity, participants }) => ({
-          activityId: entity.id,
-          externalId: entity.externalId!,
-          interactionType: 'email' as const,
-          subject: entity.subject,
-          notes: entity.notes,
-          occurredAt: entity.occurredAt,
-          dueAt: entity.dueAt,
-          allDay: entity.allDay ?? false,
-          ownerUserId: entity.ownerUserId,
-          durationMinutes: entity.durationMinutes,
-          location: entity.location,
-          participants,
-        })),
-        emailMap,
-        scope,
-      )
+      const { persons: matchedPersonsByActivity, companies: matchedCompaniesByActivity } =
+        await autoLinkActivityToCustomers(
+          em,
+          pendingLinks.map(({ entity, participants }) => ({
+            activityId: entity.id,
+            externalId: entity.externalId!,
+            interactionType: 'email' as const,
+            subject: entity.subject,
+            notes: entity.notes,
+            occurredAt: entity.occurredAt,
+            dueAt: entity.dueAt,
+            allDay: entity.allDay ?? false,
+            ownerUserId: entity.ownerUserId,
+            durationMinutes: entity.durationMinutes,
+            location: entity.location,
+            participants,
+          })),
+          emailMap,
+          scope,
+        )
 
-      if (matchedPersons.size > 0) {
+      if (matchedPersonsByActivity.size > 0) {
         const emailEntries: EmailThreadEntry[] = pendingLinks.map(({ entity, participants, conversationId, folder }) => ({
           activityId: entity.id,
           externalId: entity.externalId!,
@@ -303,7 +304,7 @@ export async function syncChannelMail(
           ownerUserId: entity.ownerUserId ?? null,
           participants,
         }))
-        await buildEmailThreadRecords(em, emailEntries, matchedPersons, channel.id, scope)
+        await buildEmailThreadRecords(em, emailEntries, matchedPersonsByActivity, channel.id, scope, matchedCompaniesByActivity)
       }
     }
   }
