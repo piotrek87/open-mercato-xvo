@@ -38,6 +38,12 @@ export interface GraphCalendarEvent {
   type?: string
   webLink?: string
   lastModifiedDateTime?: string
+  // Teams / online meeting fields (added Sprint 5 P2)
+  isOnlineMeeting?: boolean
+  /** 'teamsForBusiness' | 'skypeForBusiness' | 'skypeForConsumer' | 'unknown' */
+  onlineMeetingProvider?: string
+  /** Deprecated by MS but reliable simple-string join URL — works on delta endpoint */
+  onlineMeetingUrl?: string | null
 }
 
 export interface CalendarDeltaPage {
@@ -87,19 +93,20 @@ async function graphFetch(url: string, accessToken: string): Promise<unknown> {
 export async function fetchCalendarDeltaPage(
   accessToken: string,
   deltaToken?: string,
+  syncFromDate?: Date,
 ): Promise<CalendarDeltaPage> {
   let url: string
   if (deltaToken) {
     // Resume from cursor — the deltaLink already contains all parameters
     url = deltaToken
   } else {
-    // Bootstrap: request events from now-7d to now+WINDOW_DAYS
+    // Bootstrap: use user-configured syncFromDate or fallback to now-7d
     const now = new Date()
-    const start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+    const start = syncFromDate ?? new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
     const end = new Date(now.getTime() + CALENDAR_VIEW_WINDOW_DAYS * 24 * 60 * 60 * 1000)
     const startIso = start.toISOString().replace(/\.\d{3}Z$/, 'Z')
     const endIso = end.toISOString().replace(/\.\d{3}Z$/, 'Z')
-    url = `${GRAPH_BASE}/me/calendarView/delta?startdatetime=${startIso}&enddatetime=${endIso}&$top=100&$select=id,subject,bodyPreview,start,end,isAllDay,location,attendees,organizer,isCancelled,recurrence,seriesMasterId,type,webLink,lastModifiedDateTime`
+    url = `${GRAPH_BASE}/me/calendarView/delta?startdatetime=${startIso}&enddatetime=${endIso}&$select=id,subject,bodyPreview,start,end,isAllDay,location,attendees,organizer,isCancelled,recurrence,seriesMasterId,type,webLink,lastModifiedDateTime,isOnlineMeeting,onlineMeetingProvider,onlineMeetingUrl`
   }
 
   const raw = (await graphFetch(url, accessToken)) as {
@@ -122,6 +129,7 @@ export async function fetchCalendarDeltaPage(
 export async function drainCalendarDelta(
   accessToken: string,
   deltaToken?: string,
+  syncFromDate?: Date,
 ): Promise<{ events: GraphCalendarEvent[]; nextDeltaToken?: string }> {
   const events: GraphCalendarEvent[] = []
   let nextDeltaToken: string | undefined
@@ -129,7 +137,7 @@ export async function drainCalendarDelta(
   let maxPages = 50
 
   while (maxPages-- > 0) {
-    const page = await fetchCalendarDeltaPage(accessToken, currentToken)
+    const page = await fetchCalendarDeltaPage(accessToken, currentToken, syncFromDate)
     events.push(...page.events)
 
     if (page.deltaLink) {

@@ -6,13 +6,14 @@ import {
 } from '@open-mercato/core/modules/communication_channels/lib/adapter-registry-singleton'
 import { getO365CalendarAdapter } from './lib/adapter'
 import { channelOffice365HealthCheck } from './lib/health'
+import { O365_PROVIDER_KEY } from './lib/credentials'
 
 export function register(container: AppContainer): void {
-  if (!hasChannelAdapter('office365_calendar')) {
+  if (!hasChannelAdapter(O365_PROVIDER_KEY)) {
     registerChannelAdapter(getO365CalendarAdapter())
   }
   container.register({
-    channelOffice365CalendarAdapter: asValue(getO365CalendarAdapter()),
-    channelOffice365CalendarHealthCheck: asValue(channelOffice365HealthCheck),
+    channelOffice365Adapter: asValue(getO365CalendarAdapter()),
+    channelOffice365HealthCheck: asValue(channelOffice365HealthCheck),
   })
 }

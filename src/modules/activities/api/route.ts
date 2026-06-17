@@ -14,14 +14,20 @@ import { eventsConfig } from '../events'
 import { buildActivitiesCrudOpenApi, activityCreatedSchema } from './openapi'
 
 // --- Cursor helpers ---
+// Cursor encodes effectiveDate (COALESCE(occurred_at, due_at, created_at)) + id.
+// Old cursors (format: { id, createdAt }) are rejected as invalid — acceptable at dev stage.
 
 function encodeCursor(item: Activity): string {
-  return Buffer.from(JSON.stringify({ id: item.id, createdAt: item.createdAt.toISOString() })).toString('base64')
+  const effectiveDate = item.effectiveDate ?? item.occurredAt ?? item.dueAt ?? item.createdAt
+  return Buffer.from(JSON.stringify({ id: item.id, d: effectiveDate.toISOString() })).toString('base64')
 }
 
-function decodeCursor(cursor: string): { id: string; createdAt: string } | null {
+function decodeCursor(cursor: string): { id: string; d: string } | null {
   try {
-    return JSON.parse(Buffer.from(cursor, 'base64').toString('utf8'))
+    const parsed = JSON.parse(Buffer.from(cursor, 'base64').toString('utf8'))
+    if (typeof parsed?.id !== 'string' || typeof parsed?.d !== 'string') return null
+    if (isNaN(new Date(parsed.d).getTime())) return null
+    return parsed as { id: string; d: string }
   } catch {
     return null
   }
@@ -77,6 +83,7 @@ function mapActivityToResponse(a: Activity, links: { id: string; entityType: str
     sourceType: a.sourceType ?? null,
     sourceId: a.sourceId ?? null,
     isActive: a.isActive,
+    metadata: a.metadata ?? null,
     createdAt: a.createdAt.toISOString(),
     updatedAt: a.updatedAt.toISOString(),
     customFields: {},
@@ -170,26 +177,36 @@ export async function GET(request: Request) {
       : false
 
     if (!canViewPrivate) {
-      where['$or'] = [
-        { visibility: { $ne: 'private' } },
-        { visibility: 'private', ownerUserId: auth.sub },
+      // Use $and so this doesn't overwrite the entity-link $or set above
+      where['$and'] = [
+        ...(Array.isArray(where['$and']) ? where['$and'] : []),
+        {
+          $or: [
+            { visibility: { $ne: 'private' } },
+            { visibility: 'private', ownerUserId: auth.sub },
+          ],
+        },
       ]
     }
 
-    // Cursor-based pagination
+    // Count total matching records (before cursor pagination)
+    const total = await em.count(Activity, where as FilterQuery<Activity>)
+
+    // Cursor-based pagination — keyed on effectiveDate (COALESCE(occurred_at, due_at, created_at))
     const parsedLimit = query.limit
     if (query.cursor) {
       const decoded = decodeCursor(query.cursor)
       if (!decoded) {
         return NextResponse.json({ error: 'Invalid cursor' }, { status: 400 })
       }
+      const cursorDate = new Date(decoded.d)
       if (query.sort === 'desc') {
         where['$and'] = [
           ...(Array.isArray(where['$and']) ? where['$and'] : []),
           {
             $or: [
-              { createdAt: { $lt: new Date(decoded.createdAt) } },
-              { createdAt: new Date(decoded.createdAt), id: { $lt: decoded.id } },
+              { effectiveDate: { $lt: cursorDate } },
+              { effectiveDate: cursorDate, id: { $lt: decoded.id } },
             ],
           },
         ]
@@ -198,15 +215,15 @@ export async function GET(request: Request) {
           ...(Array.isArray(where['$and']) ? where['$and'] : []),
           {
             $or: [
-              { createdAt: { $gt: new Date(decoded.createdAt) } },
-              { createdAt: new Date(decoded.createdAt), id: { $gt: decoded.id } },
+              { effectiveDate: { $gt: cursorDate } },
+              { effectiveDate: cursorDate, id: { $gt: decoded.id } },
             ],
           },
         ]
       }
     }
 
-    const orderBy = { createdAt: query.sort, id: query.sort } as { createdAt: 'asc' | 'desc'; id: 'asc' | 'desc' }
+    const orderBy = { effectiveDate: query.sort, id: query.sort } as { effectiveDate: 'asc' | 'desc'; id: 'asc' | 'desc' }
 
     const results = await findWithDecryption<Activity>(
       em,
@@ -224,6 +241,7 @@ export async function GET(request: Request) {
       data: items.map((a) => mapActivityToResponse(a)),
       hasMore,
       nextCursor,
+      total,
     })
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -405,6 +423,7 @@ const activityResponseSchema = z.object({
   sourceType: z.string().nullable(),
   sourceId: z.string().nullable(),
   isActive: z.boolean(),
+  metadata: z.record(z.string(), z.unknown()).nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
   customFields: z.record(z.string(), z.unknown()),

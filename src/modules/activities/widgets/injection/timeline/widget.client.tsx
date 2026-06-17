@@ -2,6 +2,7 @@
 
 import * as React from 'react'
 import Link from 'next/link'
+import * as Icons from 'lucide-react'
 import type { InjectionWidgetComponentProps } from '@open-mercato/shared/modules/widgets/injection'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { LoadingMessage } from '@open-mercato/ui/backend/detail'
@@ -14,24 +15,95 @@ import ActivityFilterBar from './ActivityFilterBar'
 import InlineActivityComposer from './InlineActivityComposer'
 import LogActivityDrawer from './LogActivityDrawer'
 import type { ActivityResponseDto } from './LogActivityDrawer'
-import { mergeWithFresh, type OptimisticActivity } from './utils'
+import { type OptimisticActivity } from './utils'
 
 type ActivitiesResponse = {
   data?: ActivityCardData[]
   items?: ActivityCardData[]
   hasMore?: boolean
+  nextCursor?: string | null
+  total?: number
 }
 
 type RegistryResponse = {
   data?: ActivityTypeDefinition[]
 }
 
+// ─── Date helpers ────────────────────────────────────────────────────────────
+
+function startOfWeek(date: Date): Date {
+  const d = new Date(date)
+  const day = d.getDay() // 0=Sun
+  const diff = day === 0 ? -6 : 1 - day // shift to Monday
+  d.setDate(d.getDate() + diff)
+  d.setHours(0, 0, 0, 0)
+  return d
+}
+
+function addWeeks(date: Date, n: number): Date {
+  const d = new Date(date)
+  d.setDate(d.getDate() + 7 * n)
+  return d
+}
+
+function getWeekDays(anchor: Date): Date[] {
+  const start = startOfWeek(anchor)
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(start)
+    d.setDate(d.getDate() + i)
+    return d
+  })
+}
+
+function toDateKey(date: Date): string {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+function getEffectiveDate(item: { occurredAt: string | null; dueAt: string | null; createdAt: string }): Date {
+  return new Date(item.occurredAt ?? item.dueAt ?? item.createdAt)
+}
+
+// ─── Timeline grouping ───────────────────────────────────────────────────────
+
+type DateGroup = { key: string; label: string; dateItems: OptimisticActivity[] }
+
+function groupByEffectiveDate(items: OptimisticActivity[]): DateGroup[] {
+  const groups = new Map<string, DateGroup>()
+  for (const item of items) {
+    const date = getEffectiveDate(item)
+    const key = toDateKey(date)
+    if (!groups.has(key)) {
+      const label = date.toLocaleDateString(undefined, {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+      })
+      groups.set(key, { key, label, dateItems: [] })
+    }
+    groups.get(key)!.dateItems.push(item)
+  }
+  return Array.from(groups.values()).sort((a, b) => b.key.localeCompare(a.key))
+}
+
+// ─── Context resolver ────────────────────────────────────────────────────────
+
 function resolveEntityContext(context: unknown): { entityType: string | null; entityId: string | null } {
   const ctx = context && typeof context === 'object' ? (context as Record<string, unknown>) : {}
-  return {
-    entityType: typeof ctx.entityType === 'string' ? ctx.entityType : null,
-    entityId: typeof ctx.entityId === 'string' ? ctx.entityId : null,
-  }
+  const rawKind = typeof ctx.entityType === 'string'
+    ? ctx.entityType
+    : typeof ctx.resourceKind === 'string'
+      ? (ctx.resourceKind as string).replace('.', ':')
+      : null
+  const rawId = typeof ctx.entityId === 'string'
+    ? ctx.entityId
+    : typeof ctx.resourceId === 'string'
+      ? ctx.resourceId
+      : null
+  return { entityType: rawKind, entityId: rawId }
 }
 
 function dtoToCardData(dto: ActivityResponseDto): ActivityCardData {
@@ -47,43 +119,178 @@ function dtoToCardData(dto: ActivityResponseDto): ActivityCardData {
   }
 }
 
+// ─── Calendar strip ──────────────────────────────────────────────────────────
+
+interface CalendarStripProps {
+  anchorDate: Date
+  selectedDay: string | null
+  activityTypesByDay: Map<string, string[]>  // dateKey → [typeIds]
+  onPrevWeek: () => void
+  onNextWeek: () => void
+  onSelectDay: (key: string | null) => void
+}
+
+// Fixed palette per type — used for calendar dots
+const TYPE_DOT_COLORS: Record<string, string> = {
+  email:   'bg-amber-400',
+  meeting: 'bg-blue-500',
+  call:    'bg-green-500',
+  note:    'bg-violet-500',
+  task:    'bg-gray-400',
+}
+
+function typeDotColor(typeId: string): string {
+  return TYPE_DOT_COLORS[typeId] ?? 'bg-muted-foreground/40'
+}
+
+function CalendarStrip({
+  anchorDate,
+  selectedDay,
+  activityTypesByDay,
+  onPrevWeek,
+  onNextWeek,
+  onSelectDay,
+}: CalendarStripProps) {
+  const days = getWeekDays(anchorDate)
+  const todayKey = toDateKey(new Date())
+  const monthLabel = anchorDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+
+  return (
+    <div className="flex flex-col gap-1.5 rounded-md border border-border bg-muted/30 p-2">
+      {/* Month header + navigation */}
+      <div className="flex items-center justify-between">
+        <button
+          type="button"
+          onClick={onPrevWeek}
+          className="rounded p-1 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+          aria-label="Previous week"
+        >
+          <Icons.ChevronLeft className="size-3.5" aria-hidden="true" />
+        </button>
+        <span className="text-xs font-semibold text-foreground capitalize">{monthLabel}</span>
+        <button
+          type="button"
+          onClick={onNextWeek}
+          className="rounded p-1 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+          aria-label="Next week"
+        >
+          <Icons.ChevronRight className="size-3.5" aria-hidden="true" />
+        </button>
+      </div>
+
+      {/* Day tiles */}
+      <div className="grid grid-cols-7 gap-0.5">
+        {days.map((day) => {
+          const key = toDateKey(day)
+          const types = activityTypesByDay.get(key) ?? []
+          const isSelected = selectedDay === key
+          const isToday = key === todayKey
+          const hasActivities = types.length > 0
+
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => onSelectDay(isSelected ? null : key)}
+              className={[
+                'flex flex-col items-center rounded-md py-1.5 px-0.5 transition-colors',
+                isSelected
+                  ? 'bg-primary text-primary-foreground'
+                  : isToday
+                    ? 'bg-background border border-border text-foreground'
+                    : 'hover:bg-muted/60 text-muted-foreground',
+              ].join(' ')}
+            >
+              <span className="text-[9px] font-medium uppercase leading-none mb-0.5 opacity-70">
+                {day.toLocaleDateString(undefined, { weekday: 'short' })}
+              </span>
+              <span className={`text-sm font-semibold leading-none${isToday && !isSelected ? ' text-primary' : ''}`}>
+                {day.getDate()}
+              </span>
+              {/* Activity type dots */}
+              <div className="flex gap-0.5 mt-1 min-h-[6px] justify-center">
+                {hasActivities && types.slice(0, 3).map((typeId, i) => (
+                  <div
+                    key={`${typeId}-${i}`}
+                    className={[
+                      'w-1.5 h-1.5 rounded-full shrink-0',
+                      isSelected ? 'bg-primary-foreground/70' : typeDotColor(typeId),
+                    ].join(' ')}
+                  />
+                ))}
+              </div>
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Selected day label or "all" hint */}
+      {selectedDay && (
+        <div className="flex items-center justify-between pt-0.5">
+          <span className="text-xs text-muted-foreground">
+            {new Date(selectedDay + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}
+          </span>
+          <button
+            type="button"
+            onClick={() => onSelectDay(null)}
+            className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-0.5"
+          >
+            <Icons.X className="size-3" aria-hidden="true" />
+            Wszystkie
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Main widget ─────────────────────────────────────────────────────────────
+
 export default function ActivityTimelineWidget({ context }: InjectionWidgetComponentProps) {
   const t = useT()
   const { entityType, entityId } = React.useMemo(() => resolveEntityContext(context), [context])
 
   const [items, setItems] = React.useState<OptimisticActivity[]>([])
   const [typeRegistry, setTypeRegistry] = React.useState<ActivityTypeDefinition[]>([])
-  const [activeFilter, setActiveFilter] = React.useState<string | null>(null)
+
+  // Calendar navigation state
+  const [anchorDate, setAnchorDate] = React.useState<Date>(() => startOfWeek(new Date()))
+  const [selectedDay, setSelectedDay] = React.useState<string | null>(null)
+
+  // Filters
+  const [activityTypeFilter, setActivityTypeFilter] = React.useState<string | null>(null)
+  const [sortDir, setSortDir] = React.useState<'asc' | 'desc'>('desc')
+
+  const [total, setTotal] = React.useState<number | null>(null)
+  const [hasMore, setHasMore] = React.useState(false)
+  const [loadingMore, setLoadingMore] = React.useState(false)
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [drawerOpen, setDrawerOpen] = React.useState(false)
   const [drawerInitialType, setDrawerInitialType] = React.useState<string | undefined>(undefined)
+  const nextCursorRef = React.useRef<string | null>(null)
 
-  // Load activity type registry (once)
   React.useEffect(() => {
     readApiResultOrThrow<RegistryResponse>('/api/activity-types', undefined, { allowNullResult: true })
-      .then((res) => {
-        if (Array.isArray(res?.data)) setTypeRegistry(res.data)
-      })
-      .catch(() => {
-        // Registry failure is non-fatal — activities still render with DefaultActivityCard
-      })
+      .then((res) => { if (Array.isArray(res?.data)) setTypeRegistry(res.data) })
+      .catch(() => {})
   }, [])
 
-  const loadActivities = React.useCallback(async () => {
-    if (!entityType || !entityId) {
-      setLoading(false)
-      return
-    }
-    setLoading(true)
+  const loadActivities = React.useCallback(async (opts: { append?: boolean } = {}) => {
+    if (!entityType || !entityId) { setLoading(false); return }
+    if (opts.append) { setLoadingMore(true) } else { setLoading(true); nextCursorRef.current = null }
     setError(null)
     try {
       const params = new URLSearchParams({
         entityType,
         entityId,
-        limit: '50',
+        limit: '100',    // load enough for the whole calendar view client-side
         includeLinked: 'true',
+        sort: sortDir,
       })
+      if (opts.append && nextCursorRef.current) params.set('cursor', nextCursorRef.current)
+      if (activityTypeFilter) params.set('activityType', activityTypeFilter)
+
       const payload = await readApiResultOrThrow<ActivitiesResponse>(
         `/api/activities?${params.toString()}`,
         undefined,
@@ -91,37 +298,42 @@ export default function ActivityTimelineWidget({ context }: InjectionWidgetCompo
       )
       const list: ActivityCardData[] = Array.isArray(payload?.data)
         ? (payload.data as ActivityCardData[])
-        : Array.isArray(payload?.items)
-          ? (payload.items as ActivityCardData[])
-          : []
-      setItems((prev) =>
-        mergeWithFresh(
-          prev,
-          list.map((item) => ({
-            id: String(item.id ?? ''),
-            subject: String(item.subject ?? ''),
-            activityType: String(item.activityType ?? ''),
-            status: String(item.status ?? 'not_started'),
-            dueAt: item.dueAt ?? null,
-            occurredAt: item.occurredAt ?? null,
-            createdAt: String(item.createdAt ?? ''),
-            ownerUserId: item.ownerUserId ?? null,
-          })),
-        ),
-      )
+        : Array.isArray(payload?.items) ? (payload.items as ActivityCardData[]) : []
+
+      const mapped = list.map((item) => ({
+        id: String(item.id ?? ''),
+        subject: String(item.subject ?? ''),
+        activityType: String(item.activityType ?? ''),
+        status: String(item.status ?? 'not_started'),
+        dueAt: item.dueAt ?? null,
+        occurredAt: item.occurredAt ?? null,
+        createdAt: String(item.createdAt ?? ''),
+        ownerUserId: item.ownerUserId ?? null,
+      }))
+
+      if (opts.append) {
+        setItems((prev) => {
+          const existingIds = new Set(prev.filter((i) => !i._isOptimistic).map((i) => i.id))
+          return [...prev, ...mapped.filter((m) => !existingIds.has(m.id))]
+        })
+      } else {
+        setItems((prev) => [...prev.filter((i) => i._isOptimistic), ...mapped])
+      }
+
+      nextCursorRef.current = payload?.nextCursor ?? null
+      setHasMore(payload?.hasMore ?? false)
+      setTotal(payload?.total ?? null)
     } catch (err) {
       console.error('activities.timeline.load', err)
       setError(t('activities.timeline.error.load', 'Failed to load activities'))
     } finally {
       setLoading(false)
+      setLoadingMore(false)
     }
-  }, [entityType, entityId, t])
+  }, [entityType, entityId, sortDir, activityTypeFilter, t])
 
-  React.useEffect(() => {
-    void loadActivities()
-  }, [loadActivities])
+  React.useEffect(() => { void loadActivities() }, [loadActivities])
 
-  // Refresh on tab visibility change
   React.useEffect(() => {
     function handleVisibility() {
       if (document.visibilityState === 'visible') void loadActivities()
@@ -130,14 +342,9 @@ export default function ActivityTimelineWidget({ context }: InjectionWidgetCompo
     return () => document.removeEventListener('visibilitychange', handleVisibility)
   }, [loadActivities])
 
-  // ── Optimistic update handlers ──────────────────────────────────────────────
+  // ── Optimistic handlers ────────────────────────────────────────────────────
 
-  function handleActivityCreated(draft: {
-    entityType: string
-    entityId: string
-    typeId: string
-    tempId: string
-  }) {
+  function handleActivityCreated(draft: { entityType: string; entityId: string; typeId: string; tempId: string }) {
     const placeholder: OptimisticActivity = {
       id: draft.tempId,
       subject: t('activities.optimistic.saving', 'Saving…'),
@@ -154,10 +361,7 @@ export default function ActivityTimelineWidget({ context }: InjectionWidgetCompo
   }
 
   function handleActivitySaved(tempId: string, activity: ActivityResponseDto) {
-    setItems((prev) => {
-      const withoutPlaceholder = prev.filter((a) => a._tempId !== tempId)
-      return [dtoToCardData(activity), ...withoutPlaceholder]
-    })
+    setItems((prev) => [dtoToCardData(activity), ...prev.filter((a) => a._tempId !== tempId)])
   }
 
   function handleActivityFailed(tempId: string) {
@@ -173,21 +377,47 @@ export default function ActivityTimelineWidget({ context }: InjectionWidgetCompo
     setDrawerOpen(true)
   }
 
-  // ── Derived: filter bar ────────────────────────────────────────────────────
+  // ── Calendar helpers ───────────────────────────────────────────────────────
 
-  const presentTypeIds = React.useMemo(
-    () => new Set(items.filter((i) => !i._isOptimistic).map((i) => i.activityType)),
-    [items],
-  )
-  const availableFilterTypes = React.useMemo(
-    () => typeRegistry.filter((tp) => presentTypeIds.has(tp.id)),
-    [typeRegistry, presentTypeIds],
-  )
+  // Map each day to list of unique type ids present (for dots)
+  const activityTypesByDay = React.useMemo(() => {
+    const map = new Map<string, string[]>()
+    for (const item of items) {
+      if (item._isOptimistic) continue
+      const key = toDateKey(getEffectiveDate(item))
+      if (!map.has(key)) map.set(key, [])
+      const types = map.get(key)!
+      if (!types.includes(item.activityType)) types.push(item.activityType)
+    }
+    return map
+  }, [items])
 
-  const filteredItems = React.useMemo(
-    () => (activeFilter ? items.filter((i) => i.activityType === activeFilter) : items),
-    [items, activeFilter],
-  )
+  // Navigate calendar — anchor changes only (no API reload)
+  function handlePrevWeek() {
+    setAnchorDate((d) => addWeeks(d, -1))
+    setSelectedDay(null)
+  }
+
+  function handleNextWeek() {
+    setAnchorDate((d) => addWeeks(d, 1))
+    setSelectedDay(null)
+  }
+
+  function handleSelectDay(key: string | null) {
+    setSelectedDay(key)
+  }
+
+  // ── Derived display items ──────────────────────────────────────────────────
+
+  const displayItems = React.useMemo(() => {
+    let result = activityTypeFilter
+      ? items.filter((i) => !i._isOptimistic || i.activityType === activityTypeFilter)
+      : items
+    if (selectedDay) {
+      result = result.filter((i) => toDateKey(getEffectiveDate(i)) === selectedDay)
+    }
+    return result
+  }, [items, activityTypeFilter, selectedDay])
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -197,27 +427,43 @@ export default function ActivityTimelineWidget({ context }: InjectionWidgetCompo
 
   if (error) {
     return (
-      <div className="rounded-md border border-border p-4 text-sm text-status-error-text">
-        {error}
-      </div>
+      <div className="rounded-md border border-border p-4 text-sm text-status-error-text">{error}</div>
     )
   }
 
-  const nonOptimisticEmpty = items.filter((i) => !i._isOptimistic).length === 0 && !loading
+  const noResults = displayItems.filter((i) => !i._isOptimistic).length === 0 && !loading
 
   return (
     <div className="flex flex-col gap-3">
-      {/* Log activity header row */}
+      {/* Header */}
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <span className="text-sm font-medium text-foreground">
-          {t('activities.timeline.title', 'Activity Timeline')}
-        </span>
-        <Button type="button" size="sm" variant="outline" onClick={() => openDrawer()}>
-          {t('activities.timeline.action.log', 'Log Activity')}
-        </Button>
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-foreground">
+            {t('activities.timeline.title', 'Activity Timeline')}
+          </span>
+          {total !== null && (
+            <span className="text-xs text-muted-foreground bg-muted/60 rounded-full px-2 py-0.5">
+              {total}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors rounded px-1.5 py-1 hover:bg-muted/60"
+            aria-label={sortDir === 'desc' ? 'Sort oldest first' : 'Sort newest first'}
+          >
+            <Icons.ArrowUpDown className="size-3" aria-hidden="true" />
+            {sortDir === 'desc' ? t('activities.sort.newest', 'Najnowsze') : t('activities.sort.oldest', 'Najstarsze')}
+          </button>
+          <Button type="button" size="sm" variant="outline" onClick={() => openDrawer()}>
+            {t('activities.timeline.action.log', 'Log Activity')}
+          </Button>
+        </div>
       </div>
 
-      {/* Inline composer — only when entity context is known */}
+      {/* Inline composer */}
       {entityType && entityId && (
         <InlineActivityComposer
           entityType={entityType}
@@ -230,55 +476,110 @@ export default function ActivityTimelineWidget({ context }: InjectionWidgetCompo
         />
       )}
 
-      {/* Filter bar */}
-      {availableFilterTypes.length > 1 && (
+      {/* Calendar strip — week navigation with type dots */}
+      <CalendarStrip
+        anchorDate={anchorDate}
+        selectedDay={selectedDay}
+        activityTypesByDay={activityTypesByDay}
+        onPrevWeek={handlePrevWeek}
+        onNextWeek={handleNextWeek}
+        onSelectDay={handleSelectDay}
+      />
+
+      {/* Type filter chips — server-side */}
+      {typeRegistry.length > 0 && (
         <ActivityFilterBar
-          availableTypes={availableFilterTypes}
-          activeFilter={activeFilter}
-          onChange={setActiveFilter}
+          availableTypes={typeRegistry}
+          activeFilter={activityTypeFilter}
+          onChange={setActivityTypeFilter}
         />
+      )}
+
+      {/* "Load more for full history" notice */}
+      {hasMore && !selectedDay && (
+        <p className="text-xs text-muted-foreground text-center">
+          Załadowano {items.filter(i => !i._isOptimistic).length} z {total ?? '?'} — starsze aktywności mogą nie być widoczne na kalendarzu.{' '}
+          <button type="button" onClick={() => void loadActivities({ append: true })} className="underline hover:text-foreground">
+            {t('activities.timeline.loadMore', 'Wczytaj więcej')}
+          </button>
+        </p>
       )}
 
       {/* Empty state */}
-      {nonOptimisticEmpty && items.length === 0 && (
+      {noResults && (
         <EmptyState
-          title={t('activities.timeline.empty.title', 'No activities yet')}
-          description={t(
-            'activities.timeline.empty.description',
-            'Log an activity to start tracking calls, tasks, and meetings for this record.',
-          )}
-          actions={
-            <Button type="button" asChild size="sm" variant="outline">
-              <Link href="/backend/activities">
-                {t('activities.timeline.action.log', 'Log Activity')}
-              </Link>
-            </Button>
+          title={selectedDay ? 'Brak aktywności w tym dniu' : t('activities.timeline.empty.title', 'No activities yet')}
+          description={selectedDay
+            ? 'Wybierz inny dzień lub wyczyść filtr.'
+            : t('activities.timeline.empty.description', 'Log an activity to start tracking calls, tasks, and meetings for this record.')
           }
+          actions={!selectedDay ? (
+            <Button type="button" asChild size="sm" variant="outline">
+              <Link href="/backend/activities">{t('activities.timeline.action.log', 'Log Activity')}</Link>
+            </Button>
+          ) : undefined}
         />
       )}
 
-      {/* Activity list */}
-      {filteredItems.length > 0 && (
-        <ul className="flex flex-col gap-2">
-          {filteredItems.map((item) => {
-            const typeDef = typeRegistry.find((td) => td.id === item.activityType)
-            return (
-              <li
-                key={item._tempId ?? item.id}
-                className={item._isOptimistic ? 'opacity-60 pointer-events-none' : undefined}
-              >
-                <React.Suspense
-                  fallback={<DefaultActivityCard activity={item} typeDef={typeDef} />}
-                >
-                  <DefaultActivityCard activity={item} typeDef={typeDef} />
-                </React.Suspense>
-              </li>
-            )
-          })}
-        </ul>
+      {/* Timeline grouped by date */}
+      {displayItems.length > 0 && (
+        <div className="flex flex-col">
+          {groupByEffectiveDate(displayItems).map(({ key, label, dateItems }) => (
+            <div key={key}>
+              <div className="flex items-center gap-2 mt-2 mb-1.5">
+                <div className="h-px flex-1 bg-border" />
+                <span className="text-xs font-medium text-muted-foreground capitalize whitespace-nowrap px-1">
+                  {label}
+                </span>
+                <div className="h-px flex-1 bg-border" />
+              </div>
+              <div className="flex flex-col">
+                {dateItems.map((item, idx) => {
+                  const typeDef = typeRegistry.find((td) => td.id === item.activityType)
+                  const isLast = idx === dateItems.length - 1
+                  return (
+                    <div
+                      key={item._tempId ?? item.id}
+                      className={`flex gap-3 items-stretch${item._isOptimistic ? ' opacity-60 pointer-events-none' : ''}`}
+                    >
+                      {/* Gutter: line + dot */}
+                      <div className="flex flex-col items-center w-5 shrink-0" aria-hidden="true">
+                        <div className="w-px bg-border grow" />
+                        <div className="w-2.5 h-2.5 shrink-0 rounded-full border-2 border-muted-foreground/50 bg-background" />
+                        {!isLast && <div className="w-px bg-border grow" />}
+                      </div>
+                      {/* Card */}
+                      <div className="flex-1 min-w-0 py-1.5">
+                        <DefaultActivityCard activity={item} typeDef={typeDef} />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
       )}
 
-      {/* Full-form drawer */}
+      {/* Load more (append) */}
+      {hasMore && !loadingMore && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="self-center text-muted-foreground"
+          onClick={() => void loadActivities({ append: true })}
+        >
+          {t('activities.timeline.loadMore', 'Wczytaj więcej')}
+        </Button>
+      )}
+      {loadingMore && (
+        <div className="flex justify-center py-2">
+          <Icons.Loader2 className="size-4 animate-spin text-muted-foreground" aria-hidden="true" />
+        </div>
+      )}
+
+      {/* Drawer */}
       {entityType && entityId && (
         <LogActivityDrawer
           open={drawerOpen}

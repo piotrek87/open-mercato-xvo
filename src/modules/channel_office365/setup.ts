@@ -4,13 +4,92 @@ import {
   registerChannelAdapter,
 } from '@open-mercato/core/modules/communication_channels/lib/adapter-registry-singleton'
 import { getO365CalendarAdapter } from './lib/adapter'
+import { O365_PROVIDER_KEY } from './lib/credentials'
+
+// Stable UUIDs for scheduler upserts — must be valid UUIDs (ScheduledJob.id is uuid type)
+const CALENDAR_SYNC_SCHEDULE_ID = '3b8f7e4a-2c1d-4e5f-8a9b-0c1d2e3f4a5b'
+// Mail sync scheduler — registered in Sprint 5 Phase 2 when mail sync is implemented
+const MAIL_SYNC_SCHEDULE_ID = '7c2e9f1b-4a8d-5b6e-9c0d-1e2f3a4b5c6d'
 
 function ensureO365AdapterRegistered(): void {
-  if (hasChannelAdapter('office365_calendar')) return
+  if (hasChannelAdapter(O365_PROVIDER_KEY)) return
   registerChannelAdapter(getO365CalendarAdapter())
 }
 
 ensureO365AdapterRegistered()
+
+async function ensureCalendarSyncSchedule(
+  container: import('awilix').AwilixContainer | undefined,
+): Promise<void> {
+  if (!container) return
+  let schedulerService: { register: (r: Record<string, unknown>) => Promise<void> } | undefined
+  try {
+    schedulerService = container.resolve('schedulerService')
+  } catch {
+    schedulerService = undefined
+  }
+  if (!schedulerService) return
+  try {
+    await schedulerService.register({
+      id: CALENDAR_SYNC_SCHEDULE_ID,
+      name: 'Microsoft 365 Calendar Sync',
+      description: 'Sync Microsoft 365 calendar events to Activities every 5 minutes via Graph Calendar Delta API.',
+      scopeType: 'system',
+      scheduleType: 'interval',
+      scheduleValue: '5m',
+      timezone: 'UTC',
+      targetType: 'queue',
+      targetQueue: 'channel-office365-calendar-sync',
+      targetPayload: {},
+      sourceType: 'module',
+      sourceModule: 'channel_office365',
+      isEnabled: true,
+    })
+  } catch (error) {
+    console.warn(
+      '[channel_office365] Failed to register calendar-sync schedule:',
+      error instanceof Error ? error.message : error,
+    )
+  }
+}
+
+// Mail sync scheduler — placeholder registered now so the UUID is stable.
+// Worker (channel-office365-mail-sync) is implemented in Sprint 5 Phase 2.
+// isEnabled: false prevents it from firing before the worker exists.
+async function ensureMailSyncSchedule(
+  container: import('awilix').AwilixContainer | undefined,
+): Promise<void> {
+  if (!container) return
+  let schedulerService: { register: (r: Record<string, unknown>) => Promise<void> } | undefined
+  try {
+    schedulerService = container.resolve('schedulerService')
+  } catch {
+    schedulerService = undefined
+  }
+  if (!schedulerService) return
+  try {
+    await schedulerService.register({
+      id: MAIL_SYNC_SCHEDULE_ID,
+      name: 'Microsoft 365 Mail Sync',
+      description: 'Sync Microsoft 365 mail to Activities every 15 minutes via Graph Mail Delta API.',
+      scopeType: 'system',
+      scheduleType: 'interval',
+      scheduleValue: '15m',
+      timezone: 'UTC',
+      targetType: 'queue',
+      targetQueue: 'channel-office365-mail-sync',
+      targetPayload: {},
+      sourceType: 'module',
+      sourceModule: 'channel_office365',
+      isEnabled: true,
+    })
+  } catch (error) {
+    console.warn(
+      '[channel_office365] Failed to register mail-sync schedule:',
+      error instanceof Error ? error.message : error,
+    )
+  }
+}
 
 export const setup: ModuleSetupConfig = {
   defaultRoleFeatures: {
@@ -19,6 +98,10 @@ export const setup: ModuleSetupConfig = {
   },
   async onTenantCreated() {
     ensureO365AdapterRegistered()
+  },
+  async seedDefaults({ container }) {
+    await ensureCalendarSyncSchedule(container)
+    await ensureMailSyncSchedule(container)
   },
 }
 

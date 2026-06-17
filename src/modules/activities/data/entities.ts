@@ -115,6 +115,14 @@ export class Activity {
 
   @Property({ name: 'updated_at', type: Date, onCreate: () => new Date(), onUpdate: () => new Date() })
   updatedAt: Date = new Date()
+
+  // GENERATED ALWAYS STORED — COALESCE(occurred_at, due_at, created_at). Never assign manually.
+  @Property({ name: 'effective_date', type: 'timestamptz', nullable: true })
+  effectiveDate?: Date | null
+
+  // Provider-specific extra data — populated by sync workers only, never by manual creation.
+  @Property({ type: 'jsonb', nullable: true })
+  metadata?: Record<string, unknown> | null
 }
 
 @Entity({ tableName: 'activity_links' })

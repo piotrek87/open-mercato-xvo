@@ -62,7 +62,7 @@ export const o365CalendarCapabilities: ChannelCapabilities = {
   realtimePush: true,
 }
 
-class O365CalendarChannelAdapter implements ChannelAdapter {
+class O365ChannelAdapter implements ChannelAdapter {
   readonly providerKey = O365_PROVIDER_KEY
   readonly channelType = 'calendar'
   readonly capabilities = o365CalendarCapabilities
@@ -96,6 +96,7 @@ class O365CalendarChannelAdapter implements ChannelAdapter {
       state: input.state,
       scopes: O365_DEFAULT_SCOPES,
       loginHint: input.loginHint,
+      tenantId: client.tenantId,
     })
     return { authorizeUrl: url, extra: { scopes: O365_DEFAULT_SCOPES } }
   }
@@ -107,6 +108,7 @@ class O365CalendarChannelAdapter implements ChannelAdapter {
       clientSecret: client.clientSecret,
       redirectUri: input.redirectUri,
       code: input.code,
+      tenantId: client.tenantId,
     })
     let email: string | undefined
     let displayName: string | undefined
@@ -120,6 +122,9 @@ class O365CalendarChannelAdapter implements ChannelAdapter {
       // Non-fatal — fall back to token data
     }
     const expiresAt = tokenResponseToExpiresAt(token)
+    const grantedScopes = typeof token.scope === 'string' && token.scope.trim()
+      ? token.scope.trim().split(/\s+/)
+      : undefined
     return {
       credentials: {
         accessToken: token.access_token,
@@ -128,6 +133,7 @@ class O365CalendarChannelAdapter implements ChannelAdapter {
         email,
         displayName,
         msUserId,
+        ...(grantedScopes ? { grantedScopes } : {}),
       },
       externalIdentifier: email,
       displayName: displayName ?? email,
@@ -144,10 +150,12 @@ class O365CalendarChannelAdapter implements ChannelAdapter {
     if (!oauthClient?.clientId || !oauthClient?.clientSecret) {
       throw new Error('[internal] O365 OAuth client credentials (clientId/clientSecret) required for refresh')
     }
+    const clientParsed = o365ClientCredentialsSchema.safeParse(oauthClient)
     const token = await getMsOAuthClient().refreshToken({
       clientId: oauthClient.clientId,
       clientSecret: oauthClient.clientSecret,
       refreshToken: current.refreshToken,
+      tenantId: clientParsed.success ? clientParsed.data.tenantId : undefined,
     })
     const expiresAt = tokenResponseToExpiresAt(token)
     return {
@@ -171,9 +179,9 @@ function parseClientCredentialsOrThrow(value: unknown) {
   return parsed.data
 }
 
-let cachedAdapter: O365CalendarChannelAdapter | null = null
+let cachedAdapter: O365ChannelAdapter | null = null
 
-export function getO365CalendarAdapter(): O365CalendarChannelAdapter {
-  if (!cachedAdapter) cachedAdapter = new O365CalendarChannelAdapter()
+export function getO365CalendarAdapter(): O365ChannelAdapter {
+  if (!cachedAdapter) cachedAdapter = new O365ChannelAdapter()
   return cachedAdapter
 }

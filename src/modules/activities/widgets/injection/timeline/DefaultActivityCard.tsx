@@ -2,6 +2,7 @@
 
 import * as React from 'react'
 import * as Icons from 'lucide-react'
+import Link from 'next/link'
 import { EnumBadge, type EnumBadgeMap } from '@open-mercato/ui/backend/ValueIcons'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { ActivityTypeDefinition } from '../../../activity-types'
@@ -28,6 +29,15 @@ const STATUS_MAP: EnumBadgeMap = {
   in_progress: { label: 'In progress', className: 'border-blue-200 text-blue-700 bg-blue-50' },
   completed: { label: 'Completed', className: 'border-emerald-200 text-emerald-700 bg-emerald-50' },
   cancelled: { label: 'Cancelled', className: 'border-red-200 text-red-700 bg-red-50' },
+}
+
+function formatActivityDate(dateStr: string): string {
+  const date = new Date(dateStr)
+  const isNotMidnight = date.getHours() !== 0 || date.getMinutes() !== 0
+  if (isNotMidnight) {
+    return `${date.toLocaleDateString()} ${date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`
+  }
+  return date.toLocaleDateString()
 }
 
 function ActivityTypeIcon({ iconName, className }: { iconName?: string; className?: string }) {
@@ -62,7 +72,10 @@ export default function DefaultActivityCard({
   }
 
   return (
-    <div className="rounded-md border border-border bg-card p-3 flex flex-col gap-1.5">
+    <Link
+      href={`/backend/activities/${activity.id}`}
+      className="block rounded-md border border-border bg-card p-3 flex flex-col gap-1.5 hover:bg-accent/50 transition-colors"
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <ActivityTypeIcon iconName={typeDef?.icon} className="size-4 shrink-0 text-muted-foreground" />
@@ -77,10 +90,10 @@ export default function DefaultActivityCard({
         {dateDisplay ? (
           <span className="flex items-center gap-1 text-xs text-muted-foreground">
             <Icons.CalendarIcon className="size-3" aria-hidden="true" />
-            {dateLabel}: {new Date(dateDisplay).toLocaleDateString()}
+            {dateLabel}: {formatActivityDate(dateDisplay)}
           </span>
         ) : null}
       </div>
-    </div>
+    </Link>
   )
 }

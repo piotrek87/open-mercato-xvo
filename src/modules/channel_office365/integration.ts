@@ -3,25 +3,26 @@ import {
   type IntegrationBundle,
   type IntegrationDefinition,
 } from '@open-mercato/shared/modules/integrations/types'
+import { O365_INTEGRATION_ID, O365_PROVIDER_KEY } from './lib/credentials'
 
-export const channelOffice365DetailWidgetSpotId = buildIntegrationDetailWidgetSpotId('channel_office365_calendar')
+export const channelOffice365DetailWidgetSpotId = buildIntegrationDetailWidgetSpotId(O365_INTEGRATION_ID)
 
 export const integration: IntegrationDefinition = {
-  id: 'channel_office365_calendar',
-  title: 'Office 365 Calendar',
+  id: O365_INTEGRATION_ID,
+  title: 'Microsoft 365',
   description:
-    'Connect per-user Microsoft 365 accounts via OAuth2. Syncs calendar events to Activities (meeting type) every 5 minutes using the Graph Calendar Delta API.',
+    'Connect per-user Microsoft 365 accounts via OAuth2. Syncs calendar events and (Sprint 5) emails to Activities via Graph Delta API. Each staff member connects their own account — per-user OAuth, per-user sync.',
   category: 'communication',
   hub: 'communication_channels',
-  providerKey: 'office365_calendar',
+  providerKey: O365_PROVIDER_KEY,
   icon: 'calendar',
-  docsUrl: 'https://learn.microsoft.com/en-us/graph/api/event-delta',
+  docsUrl: 'https://learn.microsoft.com/en-us/graph/api/overview',
   package: '@app/channel_office365',
-  version: '0.1.0',
+  version: '0.2.0',
   author: 'OpenMercato',
   company: 'OpenMercato',
   license: 'MIT',
-  tags: ['calendar', 'office365', 'microsoft', 'oauth2', 'activities'],
+  tags: ['office365', 'microsoft', 'm365', 'calendar', 'email', 'oauth2', 'activities'],
   detailPage: {
     widgetSpotId: channelOffice365DetailWidgetSpotId,
   },
@@ -31,7 +32,7 @@ export const integration: IntegrationDefinition = {
       label: 'Microsoft Graph API v1.0',
       status: 'stable',
       default: true,
-      changelog: 'Graph Calendar Delta API with OAuth2 per-user auth.',
+      changelog: 'Graph Delta API with OAuth2 per-user auth. Calendar sync + Mail sync (Phase 2).',
     },
   ],
   credentials: {
@@ -43,7 +44,7 @@ export const integration: IntegrationDefinition = {
         required: true,
         placeholder: '00000000-0000-0000-0000-000000000000',
         helpText:
-          'Azure portal → App registrations → your app → Overview → Application (client) ID. Add redirect URI: <yourdomain>/api/communication_channels/oauth/office365_calendar/callback',
+          'Azure portal → App registrations → your app → Overview → Application (client) ID. Add redirect URI: <yourdomain>/api/communication_channels/oauth/office365/callback',
       },
       {
         key: 'clientSecret',
@@ -52,9 +53,18 @@ export const integration: IntegrationDefinition = {
         required: true,
         helpText: 'Azure portal → App registrations → your app → Certificates & secrets → New client secret. Stored encrypted.',
       },
+      {
+        key: 'tenantId',
+        label: 'Azure AD Tenant ID (optional)',
+        type: 'text',
+        required: false,
+        placeholder: 'xentivo.pl or 00000000-0000-0000-0000-000000000000',
+        helpText:
+          'Azure portal → Azure Active Directory → Overview → Primary domain or Tenant ID (GUID). When set, uses tenant-specific login endpoint — required when admin consent is configured for a specific directory. Leave empty for multi-tenant apps.',
+      },
     ],
   },
-  healthCheck: { service: 'channelOffice365CalendarHealthCheck' },
+  healthCheck: { service: 'channelOffice365HealthCheck' },
 }
 
 export const integrations: IntegrationDefinition[] = [integration]

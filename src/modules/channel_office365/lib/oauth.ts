@@ -14,9 +14,17 @@ import { O365_DEFAULT_SCOPES } from './credentials'
 export { tokenResponseToExpiresAt }
 export type TokenResponse = OAuthTokenResponse
 
-// Use 'common' for multi-tenant (global App Registration, all Microsoft tenants)
-export const O365_AUTHORIZE_URL = 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize'
-export const O365_TOKEN_URL = 'https://login.microsoftonline.com/common/oauth2/v2.0/token'
+const O365_BASE = 'https://login.microsoftonline.com'
+
+export function o365AuthorizeUrl(tenantId?: string): string {
+  return `${O365_BASE}/${tenantId ?? 'common'}/oauth2/v2.0/authorize`
+}
+export function o365TokenUrl(tenantId?: string): string {
+  return `${O365_BASE}/${tenantId ?? 'common'}/oauth2/v2.0/token`
+}
+
+// Kept for backward compat (health.ts imports this)
+export const O365_TOKEN_URL = o365TokenUrl()
 export const O365_GRAPH_ME_URL = 'https://graph.microsoft.com/v1.0/me'
 
 export interface BuildAuthorizeUrlInput {
@@ -25,6 +33,7 @@ export interface BuildAuthorizeUrlInput {
   state: string
   scopes?: string[]
   loginHint?: string
+  tenantId?: string
 }
 
 export interface ExchangeCodeInput {
@@ -32,12 +41,14 @@ export interface ExchangeCodeInput {
   clientSecret: string
   redirectUri: string
   code: string
+  tenantId?: string
 }
 
 export interface RefreshTokenInput {
   clientId: string
   clientSecret: string
   refreshToken: string
+  tenantId?: string
 }
 
 export interface MsUserInfo {
@@ -57,7 +68,7 @@ export interface MsOAuthClient {
 class RealMsOAuthClient implements MsOAuthClient {
   buildAuthorizeUrl(input: BuildAuthorizeUrlInput): string {
     const scopes = input.scopes?.length ? input.scopes : O365_DEFAULT_SCOPES
-    const url = new URL(O365_AUTHORIZE_URL)
+    const url = new URL(o365AuthorizeUrl(input.tenantId))
     url.searchParams.set('client_id', input.clientId)
     url.searchParams.set('redirect_uri', input.redirectUri)
     url.searchParams.set('response_type', 'code')
@@ -76,7 +87,7 @@ class RealMsOAuthClient implements MsOAuthClient {
     params.set('client_id', input.clientId)
     params.set('client_secret', input.clientSecret)
     params.set('scope', O365_DEFAULT_SCOPES.join(' '))
-    return requestOAuthToken(O365_TOKEN_URL, params, {
+    return requestOAuthToken(o365TokenUrl(input.tenantId), params, {
       errorLabel: 'O365 OAuth code exchange failed',
     })
   }
@@ -88,7 +99,7 @@ class RealMsOAuthClient implements MsOAuthClient {
     params.set('client_id', input.clientId)
     params.set('client_secret', input.clientSecret)
     params.set('scope', O365_DEFAULT_SCOPES.join(' '))
-    return requestOAuthToken(O365_TOKEN_URL, params, {
+    return requestOAuthToken(o365TokenUrl(input.tenantId), params, {
       errorLabel: 'O365 OAuth refresh failed',
     })
   }

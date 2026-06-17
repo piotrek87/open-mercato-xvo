@@ -5,12 +5,22 @@ import type { ModuleInjectionTable } from '@open-mercato/shared/modules/widgets/
  * Injects the ActivityTimeline widget as a tab into customer and sales order detail pages.
  */
 const injectionTable: ModuleInjectionTable = {
-  // Customer person detail page — Activities tab
+  // Customer person detail page (people route) — Activities tab
   'customers.person.detail:tabs': [
     {
       widgetId: 'activities.injection.timeline',
       kind: 'tab',
-      groupLabel: 'activities:timeline.tab.label',
+      groupLabel: 'Microsoft 365',
+      priority: 20,
+    },
+  ],
+
+  // Customer person detail page (people-v2 route) — Activities tab
+  'detail:customers.person:tabs': [
+    {
+      widgetId: 'activities.injection.timeline',
+      kind: 'tab',
+      groupLabel: 'Microsoft 365',
       priority: 20,
     },
   ],
@@ -20,7 +30,7 @@ const injectionTable: ModuleInjectionTable = {
     {
       widgetId: 'activities.injection.timeline',
       kind: 'tab',
-      groupLabel: 'activities:timeline.tab.label',
+      groupLabel: 'Microsoft 365',
       priority: 20,
     },
   ],
@@ -30,7 +40,7 @@ const injectionTable: ModuleInjectionTable = {
     {
       widgetId: 'activities.injection.timeline',
       kind: 'tab',
-      groupLabel: 'activities:timeline.tab.label',
+      groupLabel: 'Microsoft 365',
       priority: 20,
     },
   ],

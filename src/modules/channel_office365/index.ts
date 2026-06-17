@@ -2,9 +2,9 @@ import type { ModuleInfo } from '@open-mercato/shared/modules/registry'
 
 export const metadata: ModuleInfo = {
   name: 'channel_office365',
-  title: 'Office 365 Calendar',
-  version: '0.1.0',
-  description: 'Microsoft 365 calendar integration — syncs events to Activities via Graph Calendar Delta API.',
+  title: 'Microsoft 365',
+  version: '0.2.0',
+  description: 'Unified Microsoft 365 connector — per-user OAuth2, calendar sync + mail sync (Phase 2) via Graph Delta API.',
   author: 'OpenMercato',
   license: 'MIT',
 }

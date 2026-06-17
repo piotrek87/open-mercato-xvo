@@ -1,7 +1,7 @@
 'use client'
 import * as React from 'react'
-import { useQuery } from '@tanstack/react-query'
 import Link from 'next/link'
+import { useQuery } from '@tanstack/react-query'
 import { Page, PageHeader, PageBody } from '@open-mercato/ui/backend/Page'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import { TruncatedCell } from '@open-mercato/ui/backend/TruncatedCell'
@@ -11,7 +11,10 @@ import { Button } from '@open-mercato/ui/primitives/button'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import type { ColumnDef } from '@tanstack/react-table'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { PlusIcon } from 'lucide-react'
+import { PlusIcon, ChevronLeft, ChevronRight } from 'lucide-react'
+import { activityTypes } from '../activity-types'
+
+const PAGE_SIZE = 25
 
 type ActivityRow = {
   id: string
@@ -20,6 +23,7 @@ type ActivityRow = {
   status: string
   ownerUserId: string | null
   dueAt: string | null
+  occurredAt: string | null
   createdAt: string
 }
 
@@ -27,39 +31,100 @@ type ActivitiesListResponse = {
   data: ActivityRow[]
   hasMore?: boolean
   nextCursor?: string | null
+  total?: number
 }
 
 const STATUS_MAP: EnumBadgeMap = {
   not_started: { label: 'Not started', className: 'border-muted text-muted-foreground bg-muted/30' },
-  in_progress: { label: 'In progress', className: 'border-blue-200 text-blue-700 bg-blue-50' },
-  completed: { label: 'Completed', className: 'border-emerald-200 text-emerald-700 bg-emerald-50' },
-  cancelled: { label: 'Cancelled', className: 'border-red-200 text-red-700 bg-red-50' },
-  snoozed: { label: 'Snoozed', className: 'border-amber-200 text-amber-700 bg-amber-50' },
+  in_progress: { label: 'In progress', className: 'border-status-info-border text-status-info-text bg-status-info-bg' },
+  completed: { label: 'Completed', className: 'border-status-success-border text-status-success-text bg-status-success-bg' },
+  cancelled: { label: 'Cancelled', className: 'border-status-error-border text-status-error-text bg-status-error-bg' },
+  snoozed: { label: 'Snoozed', className: 'border-status-warning-border text-status-warning-text bg-status-warning-bg' },
+  fact: { label: 'Fact', className: 'border-muted text-muted-foreground bg-muted/30' },
 }
 
 export default function ActivitiesListPage() {
   const t = useT()
+  const [activityTypeFilter, setActivityTypeFilter] = React.useState('')
+  const [fromFilter, setFromFilter] = React.useState('')
+  const [cursorStack, setCursorStack] = React.useState<(string | undefined)[]>([undefined])
+  const [pageIdx, setPageIdx] = React.useState(0)
+
+  const currentCursor = cursorStack[pageIdx]
 
   const { data: response, isLoading, error } = useQuery({
-    queryKey: ['activities', 'list'],
+    queryKey: ['activities', 'list', currentCursor, activityTypeFilter, fromFilter],
     queryFn: async () => {
-      const result = await apiCall<ActivitiesListResponse>('/api/activities?limit=100')
+      const params = new URLSearchParams({ limit: String(PAGE_SIZE) })
+      if (currentCursor) params.set('cursor', currentCursor)
+      if (activityTypeFilter) params.set('activityType', activityTypeFilter)
+      if (fromFilter) {
+        params.set('from', new Date(fromFilter).toISOString())
+        params.set('dateField', 'occurredAt')
+      }
+      const result = await apiCall<ActivitiesListResponse>(`/api/activities?${params}`)
       return result.result
     },
   })
 
   const rows: ActivityRow[] = response?.data ?? []
+  const hasNext = response?.hasMore ?? false
+  const nextCursor = response?.nextCursor ?? null
+  const total = response?.total ?? null
+
+  function resetPagination() {
+    setCursorStack([undefined])
+    setPageIdx(0)
+  }
+
+  function handleTypeFilter(value: string) {
+    setActivityTypeFilter(value)
+    resetPagination()
+  }
+
+  function handleFromFilter(value: string) {
+    setFromFilter(value)
+    resetPagination()
+  }
+
+  function handleNext() {
+    if (!nextCursor) return
+    setCursorStack((prev) => {
+      const updated = prev.slice(0, pageIdx + 1)
+      updated.push(nextCursor)
+      return updated
+    })
+    setPageIdx((p) => p + 1)
+  }
+
+  function handlePrev() {
+    if (pageIdx === 0) return
+    setPageIdx((p) => p - 1)
+  }
+
+  const typeOptions = React.useMemo(
+    () => activityTypes.map((tp) => ({ value: tp.id, label: t(tp.label, tp.id) })),
+    [t],
+  )
 
   const columns: ColumnDef<ActivityRow>[] = React.useMemo(
     () => [
       {
         accessorKey: 'subject',
         header: t('activities.list.column.subject', 'Subject'),
-        cell: ({ getValue }) => (
-          <TruncatedCell maxWidth="max-w-[320px]">
-            <span className="text-sm">{String(getValue() ?? '')}</span>
-          </TruncatedCell>
-        ),
+        cell: ({ row, getValue }) => {
+          const subject = String(getValue() ?? '').trim() || t('activities.list.subject.empty', '(no title)')
+          return (
+            <TruncatedCell maxWidth="max-w-[320px]">
+              <Link
+                href={`/backend/activities/${row.original.id}`}
+                className="text-sm hover:underline underline-offset-2"
+              >
+                {subject}
+              </Link>
+            </TruncatedCell>
+          )
+        },
       },
       {
         accessorKey: 'activityType',
@@ -76,25 +141,12 @@ export default function ActivitiesListPage() {
         ),
       },
       {
-        accessorKey: 'ownerUserId',
-        header: t('activities.list.column.owner', 'Owner'),
-        cell: ({ getValue }) => {
-          const val = getValue()
+        accessorKey: 'occurredAt',
+        header: t('activities.list.column.occurredAt', 'Date'),
+        cell: ({ row, getValue }) => {
+          const val = (getValue() as string | null) ?? row.original.dueAt
           if (!val) return <span className="text-muted-foreground text-sm">—</span>
-          return <span className="text-sm font-mono text-xs">{String(val)}</span>
-        },
-      },
-      {
-        accessorKey: 'dueAt',
-        header: t('activities.list.column.dueAt', 'Due date'),
-        cell: ({ getValue }) => {
-          const val = getValue()
-          if (!val) return <span className="text-muted-foreground text-sm">—</span>
-          return (
-            <span className="text-sm">
-              {new Date(String(val)).toLocaleDateString()}
-            </span>
-          )
+          return <span className="text-sm">{new Date(val).toLocaleDateString()}</span>
         },
       },
       {
@@ -126,6 +178,44 @@ export default function ActivitiesListPage() {
         actions={toolbar}
       />
       <PageBody>
+        <div className="mb-3 flex items-center gap-3 flex-wrap">
+          <select
+            value={activityTypeFilter}
+            onChange={(e) => handleTypeFilter(e.target.value)}
+            className="text-sm border rounded-md px-2 py-1.5 bg-background"
+          >
+            <option value="">{t('activities.list.filter.allTypes', 'All types')}</option>
+            {typeOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          <div className="flex items-center gap-1.5">
+            <label className="text-xs text-muted-foreground whitespace-nowrap">
+              {t('activities.list.filter.fromDate', 'Email date from')}
+            </label>
+            <input
+              type="date"
+              value={fromFilter}
+              onChange={(e) => handleFromFilter(e.target.value)}
+              className="text-sm border rounded-md px-2 py-1.5 bg-background"
+            />
+            {fromFilter && (
+              <button
+                type="button"
+                onClick={() => handleFromFilter('')}
+                className="text-xs text-muted-foreground hover:text-foreground"
+                aria-label={t('activities.list.filter.clearDate', 'Clear date filter')}
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          {total !== null && (
+            <span className="ml-auto text-xs text-muted-foreground">
+              {t('activities.list.stats.total', 'Total')}: <strong>{total}</strong>
+            </span>
+          )}
+        </div>
         <DataTable
           columns={columns}
           data={rows}
@@ -142,6 +232,33 @@ export default function ActivitiesListPage() {
             />
           }
         />
+        <div className="mt-3 flex items-center justify-between text-sm text-muted-foreground">
+          <span>
+            {t('activities.list.pagination.page', 'Page')} {pageIdx + 1}
+            {rows.length > 0 && ` · ${rows.length} ${t('activities.list.pagination.rows', 'rows')}`}
+            {total !== null && ` · ${total} ${t('activities.list.pagination.total', 'total')}`}
+          </span>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handlePrev}
+              disabled={pageIdx === 0 || isLoading}
+              aria-label={t('activities.list.pagination.prev', 'Previous page')}
+            >
+              <ChevronLeft className="size-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleNext}
+              disabled={!hasNext || isLoading}
+              aria-label={t('activities.list.pagination.next', 'Next page')}
+            >
+              <ChevronRight className="size-4" />
+            </Button>
+          </div>
+        </div>
       </PageBody>
     </Page>
   )

@@ -1,45 +1,42 @@
-import { O365_GRAPH_ME_URL } from './oauth'
-
+// Health check for integration-level credentials (clientId + clientSecret).
+// Per-user token validity is reflected in channel.status, not here.
+//
+// Hub contract (health-service.ts normalizeProbeResult):
+//   expects { status: 'healthy' | 'degraded' | 'unhealthy', message?, details? }
 export const channelOffice365HealthCheck = {
   async check(credentials: Record<string, unknown>): Promise<{
-    healthy: boolean
+    status: 'healthy' | 'degraded' | 'unhealthy'
     details?: Record<string, unknown>
     message?: string
   }> {
-    const accessToken = credentials.accessToken as string | undefined
-    if (!accessToken) {
-      return { healthy: false, message: 'Access token missing' }
+    const clientId = credentials.clientId as string | undefined
+    const clientSecret = credentials.clientSecret as string | undefined
+
+    if (!clientId || !clientSecret) {
+      return { status: 'unhealthy', message: 'Client ID and Secret are required' }
     }
+
+    // Probe Azure OIDC discovery — no auth needed, just checks connectivity.
     try {
       const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 10_000)
+      const timeout = setTimeout(() => controller.abort(), 8_000)
       let res: Response
       try {
-        res = await fetch(O365_GRAPH_ME_URL, {
-          headers: { Authorization: `Bearer ${accessToken}` },
-          signal: controller.signal,
-        })
+        res = await fetch(
+          'https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration',
+          { signal: controller.signal },
+        )
       } finally {
         clearTimeout(timeout)
       }
-      if (res.status === 401) {
-        return { healthy: false, message: 'Access token expired — reconnect required' }
-      }
       if (!res.ok) {
-        return { healthy: false, message: `Graph API ${res.status}` }
+        return { status: 'unhealthy', message: `Azure identity endpoint returned ${res.status}` }
       }
-      const me = (await res.json()) as { displayName?: string; mail?: string; userPrincipalName?: string }
-      return {
-        healthy: true,
-        details: {
-          displayName: me.displayName,
-          email: me.mail ?? me.userPrincipalName,
-        },
-      }
+      return { status: 'healthy', details: { clientId, configured: true } }
     } catch (err) {
       return {
-        healthy: false,
-        message: err instanceof Error ? err.message : 'Connection failed',
+        status: 'unhealthy',
+        message: err instanceof Error ? err.message : 'Cannot reach Azure identity endpoint',
       }
     }
   },
