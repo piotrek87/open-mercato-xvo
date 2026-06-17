@@ -34,6 +34,7 @@ import { CommunicationChannel } from '@open-mercato/core/modules/communication_c
 import { Activity } from '../../activities/data/entities'
 import { drainMailDelta, GraphApiError, type GraphMailMessage } from '../lib/graph-mail-client'
 import { buildEmailCustomerMap, autoLinkActivityToCustomers } from '../lib/customer-linker'
+import { buildEmailThreadRecords, type EmailThreadEntry } from '../lib/email-thread-builder'
 import {
   o365UserCredentialsSchema,
   o365ChannelStateSchema,
@@ -245,6 +246,8 @@ async function syncChannelMail(
   const pendingLinks: Array<{
     entity: Activity
     participants: Array<{ email: string; name?: string; status: string }>
+    conversationId: string | null
+    folder: 'inbox' | 'sent'
   }> = []
 
   // Apply all upserts in a single transaction
@@ -253,11 +256,11 @@ async function syncChannelMail(
       () => {
         for (const msg of validInbox) {
           const result = upsertMailActivity(msg, 'inbox', channel, em, scope, existingMap)
-          pendingLinks.push(result)
+          pendingLinks.push({ ...result, conversationId: msg.conversationId ?? null, folder: 'inbox' })
         }
         for (const msg of validSent) {
           const result = upsertMailActivity(msg, 'sent', channel, em, scope, existingMap)
-          pendingLinks.push(result)
+          pendingLinks.push({ ...result, conversationId: msg.conversationId ?? null, folder: 'sent' })
         }
       },
     ], { transaction: true, label: 'channel_office365.mail-sync' })
@@ -268,7 +271,7 @@ async function syncChannelMail(
   if (pendingLinks.length > 0) {
     const emailMap = await buildEmailCustomerMap(em, scope)
     if (emailMap.size > 0) {
-      await autoLinkActivityToCustomers(
+      const matchedPersons = await autoLinkActivityToCustomers(
         em,
         pendingLinks.map(({ entity, participants }) => ({
           activityId: entity.id,
@@ -287,6 +290,21 @@ async function syncChannelMail(
         emailMap,
         scope,
       )
+
+      if (matchedPersons.size > 0) {
+        const emailEntries: EmailThreadEntry[] = pendingLinks.map(({ entity, participants, conversationId, folder }) => ({
+          activityId: entity.id,
+          externalId: entity.externalId!,
+          conversationId,
+          subject: entity.subject,
+          bodyPreview: entity.notes ?? null,
+          occurredAt: entity.occurredAt ?? null,
+          direction: folder === 'sent' ? 'outbound' : 'inbound',
+          ownerUserId: entity.ownerUserId ?? null,
+          participants,
+        }))
+        await buildEmailThreadRecords(em, emailEntries, matchedPersons, channel.id, scope)
+      }
     }
   }
 

@@ -41,6 +41,8 @@ export interface GraphMailMessage {
   sentDateTime?: string | null
   isDraft?: boolean | null
   hasAttachments?: boolean | null
+  /** O365 conversation thread ID — used to group emails into threads in the E-maile tab */
+  conversationId?: string | null
   '@removed'?: { reason: string } | null
 }
 
@@ -57,6 +59,7 @@ const MAIL_SELECT = [
   'sentDateTime',
   'isDraft',
   'hasAttachments',
+  'conversationId',
 ].join(',')
 
 async function graphMailFetch(url: string, accessToken: string): Promise<unknown> {

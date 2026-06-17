@@ -135,13 +135,18 @@ export async function buildEmailCustomerMap(
  *
  * Cap: up to AUTO_LINK_CAP (10) person links per activity.
  */
+/**
+ * Returns Map<activityId, personIds[]> of all (activity, person) pairs that were linked.
+ * Email CIs are NOT created here — email-thread-builder.ts creates them with externalMessageId.
+ * Meeting CIs are created in Phase 3.
+ */
 export async function autoLinkActivityToCustomers(
   em: EntityManager,
   pairs: ActivityLinkPair[],
   emailMap: Map<string, string[]>,
   scope: Scope,
-): Promise<void> {
-  if (emailMap.size === 0 || pairs.length === 0) return
+): Promise<Map<string, string[]>> {
+  if (emailMap.size === 0 || pairs.length === 0) return new Map()
 
   const now = new Date()
   const personLinks: LinkRow[] = []
@@ -183,7 +188,15 @@ export async function autoLinkActivityToCustomers(
     }
   }
 
-  if (personLinks.length === 0) return
+  if (personLinks.length === 0) return new Map()
+
+  // Build matched-persons map for callers (e.g. email-thread-builder)
+  const personsByActivity = new Map<string, string[]>()
+  for (const link of personLinks) {
+    const existing = personsByActivity.get(link.activityId)
+    if (existing) existing.push(link.entityId)
+    else personsByActivity.set(link.activityId, [link.entityId])
+  }
 
   // Phase 1: insert person links
   try {
@@ -196,7 +209,7 @@ export async function autoLinkActivityToCustomers(
       '[channel_office365] autoLinkActivityToCustomers (persons) failed:',
       err instanceof Error ? err.message : err,
     )
-    return
+    return new Map()
   }
 
   // Phase 1b: set primary link on activities that don't have one yet.
@@ -306,20 +319,18 @@ export async function autoLinkActivityToCustomers(
     for (const link of personLinks) {
       const pair = pairByActivityId.get(link.activityId)
       // Skip CI creation for pairs without full metadata (e.g. backfill subscriber)
-      if (!pair?.externalId || !pair.interactionType) continue
+      // Skip emails — email-thread-builder.ts creates their CIs with externalMessageId populated
+      if (!pair?.externalId || !pair.interactionType || pair.interactionType === 'email') continue
 
-      const source = pair.interactionType === 'email'
-        ? `office365:mail:${pair.externalId}`
-        : `office365:calendar:${pair.externalId}`
+      // After the guard above, interactionType is always 'meeting' — email CIs are handled by email-thread-builder
+      const source = `office365:calendar:${pair.externalId}`
 
       const ciKey = `${link.entityId}:${source}`
       if (seenCiKeys.has(ciKey)) continue
       seenCiKeys.add(ciKey)
 
       const eventTime = pair.occurredAt ?? pair.dueAt ?? null
-      const status = (pair.interactionType === 'email' || (eventTime && eventTime <= now))
-        ? 'done'
-        : 'planned'
+      const status = (eventTime && eventTime <= now) ? 'done' : 'planned'
 
       ciRows.push({
         id: randomUUID(),
@@ -329,19 +340,18 @@ export async function autoLinkActivityToCustomers(
         body: pair.notes ?? null,
         occurredAt: eventTime,
         ownerUserId: pair.ownerUserId ?? null,
-        // Email uses 'shared' (channel-level visibility vocabulary); meeting uses 'team'
-        visibility: pair.interactionType === 'email' ? 'shared' : 'team',
+        visibility: 'team',
         status,
         source,
         durationMinutes: pair.durationMinutes ?? null,
         location: pair.location ?? null,
         allDay: pair.allDay ?? false,
         participants: pair.participants != null ? JSON.stringify(pair.participants) : null,
-        channelProviderKey: pair.interactionType === 'email' ? 'office365' : null,
+        channelProviderKey: null,
       })
     }
 
-    if (ciRows.length === 0) return
+    if (ciRows.length === 0) return personsByActivity
 
     // Batch INSERT with ON CONFLICT DO UPDATE — refreshes title/body/time on re-sync.
     // Uses the partial unique index: (entity_id, source, organization_id)
@@ -403,4 +413,6 @@ export async function autoLinkActivityToCustomers(
       err instanceof Error ? err.message : err,
     )
   }
+
+  return personsByActivity
 }
