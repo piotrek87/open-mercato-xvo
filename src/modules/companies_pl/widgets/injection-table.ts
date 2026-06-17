@@ -10,7 +10,8 @@ const injectionTable: ModuleInjectionTable = {
     },
   ],
   // Company create/edit form — inject as inline stack sections (tile groups)
-  'crud-form:customers.company': [
+  // Slot name derived from first entityId of CrudForm: customers:customer_entity → customers.customer_entity
+  'crud-form:customers.customer_entity': [
     {
       widgetId: 'companies_pl.injection.company-lookup',
       kind: 'stack',
