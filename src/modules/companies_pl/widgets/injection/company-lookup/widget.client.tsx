@@ -7,6 +7,7 @@ import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
 import { Label } from '@open-mercato/ui/primitives/label'
 import { Spinner } from '@open-mercato/ui/primitives/spinner'
+import { useRouter } from 'next/navigation'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { parsePolishAddress } from '../../../lib/parsePolishAddress'
 
@@ -77,6 +78,7 @@ export default function CompanyLookupWidget({
   onDataChange,
   disabled,
 }: InjectionWidgetComponentProps<{ companyId?: string | null; data?: unknown; formId?: string }, unknown>) {
+  const router = useRouter()
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [addressMessage, setAddressMessage] = React.useState<string | null>(null)
@@ -315,9 +317,10 @@ export default function CompanyLookupWidget({
           if (!next.residenceAddress && !next.workingAddress) return null
           return next
         })
-        setAddressMessage('Adres dodany.')
+        setAddressMessage('Adres zapisany w systemie.')
         const onAddressAdded = (context as { onAddressAdded?: () => void })?.onAddressAdded
         if (typeof onAddressAdded === 'function') onAddressAdded()
+        router.refresh()
       } catch (e) {
         setAddressMessage(e instanceof Error ? e.message : 'Nie udało się dodać adresu.')
       } finally {
@@ -458,7 +461,7 @@ export default function CompanyLookupWidget({
                 onClick={() => addAddressToTab('residence')}
               >
                 {addingAddress === 'residence' ? <Spinner className="mr-1.5 h-3 w-3" /> : null}
-                {isCreateWithAddresses ? 'Dodaj adres siedziby' : 'Dodaj adres siedziby do zakładki Adresy'}
+                {'Zapisz adres siedziby'}
               </Button>
             )}
             {pendingAddresses?.workingAddress && (
@@ -470,7 +473,7 @@ export default function CompanyLookupWidget({
                 onClick={() => addAddressToTab('working')}
               >
                 {addingAddress === 'working' ? <Spinner className="mr-1.5 h-3 w-3" /> : null}
-                {isCreateWithAddresses ? 'Dodaj adres rejestracyjny' : 'Dodaj adres rejestracyjny do zakładki Adresy'}
+                {'Zapisz adres rejestracyjny'}
               </Button>
             )}
           </div>
