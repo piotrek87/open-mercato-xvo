@@ -39,30 +39,28 @@ export async function GET(request: Request): Promise<Response> {
 
   const result: Record<string, unknown> = { tenantId, organizationId }
 
-  // Step 1: Activity counts
-  result.step1_activities = await safeQuery('activities', () =>
-    conn.execute(
-      `SELECT external_provider, count(*)::int AS cnt
-       FROM activities
-       WHERE tenant_id = $1 AND organization_id = $2
-         AND deleted_at IS NULL
-         AND external_provider IN ('office365_mail','office365_calendar')
-       GROUP BY external_provider`,
-      [tenantId, organizationId],
-    ),
-  )
+  // Step 1: Activity counts (ORM-based, avoids raw SQL param format issues)
+  result.step1_activities = await safeQuery('activities', async () => {
+    const [mailCount, calCount] = await Promise.all([
+      em.count('Activity' as never, { tenantId, deletedAt: null, externalProvider: 'office365_mail' } as never),
+      em.count('Activity' as never, { tenantId, deletedAt: null, externalProvider: 'office365_calendar' } as never),
+    ])
+    return [
+      { external_provider: 'office365_mail', cnt: mailCount },
+      { external_provider: 'office365_calendar', cnt: calCount },
+    ]
+  })
 
-  // Step 2: Sample mail activity participants
+  // Step 2: Sample mail activity participants (raw with ? placeholders)
   result.step2_sampleParticipants = await safeQuery('sampleParticipants', async () => {
     const rows = await conn.execute(
       `SELECT subject, external_provider, occurred_at, participants
        FROM activities
-       WHERE tenant_id = $1 AND organization_id = $2
-         AND deleted_at IS NULL
+       WHERE tenant_id = ? AND deleted_at IS NULL
          AND external_provider = 'office365_mail'
        ORDER BY occurred_at DESC NULLS LAST
        LIMIT 3`,
-      [tenantId, organizationId],
+      [tenantId],
     ) as Array<{ subject: string; external_provider: string; occurred_at: string | null; participants: unknown }>
     return rows.map(r => ({
       subject: r.subject,
@@ -71,37 +69,62 @@ export async function GET(request: Request): Promise<Response> {
     }))
   })
 
-  // Step 3: ActivityLink counts
+  // Step 3: ActivityLink counts (raw with ? placeholders)
   result.step3_activityLinks = await safeQuery('activityLinks', () =>
     conn.execute(
       `SELECT al.entity_type, count(*)::int AS cnt
        FROM activity_links al
        JOIN activities a ON a.id = al.activity_id
-       WHERE a.tenant_id = $1 AND a.organization_id = $2
-         AND a.deleted_at IS NULL
+       WHERE a.tenant_id = ? AND a.deleted_at IS NULL
          AND a.external_provider IN ('office365_mail','office365_calendar')
        GROUP BY al.entity_type`,
-      [tenantId, organizationId],
+      [tenantId],
     ),
   )
 
-  // Step 4: CustomerInteraction counts
+  // Step 4: CustomerInteraction counts (raw with ? placeholders)
   result.step4_customerInteractions = await safeQuery('customerInteractions', () =>
     conn.execute(
       `SELECT interaction_type,
               count(*)::int AS total,
               count(external_message_id)::int AS with_mcl_id
        FROM customer_interactions
-       WHERE tenant_id = $1 AND organization_id = $2
-         AND deleted_at IS NULL
-         AND source LIKE 'office365:%'
+       WHERE tenant_id = ? AND deleted_at IS NULL AND source LIKE 'office365:%'
        GROUP BY interaction_type`,
-      [tenantId, organizationId],
+      [tenantId],
     ),
   )
 
-  // Step 5: CRM persons via findWithDecryption
-  result.step5_crmPersons = await safeQuery('crmPersons', async () => {
+  // Step 5a: CRM persons via ORM (no encryption, just counts to check org scoping)
+  result.step5a_crmPersonsRaw = await safeQuery('crmPersonsRaw', async () => {
+    const [byTenantOnly, byBoth] = await Promise.all([
+      em.count(CustomerEntity, { tenantId, kind: 'person', deletedAt: null }),
+      em.count(CustomerEntity, { tenantId, organizationId, kind: 'person', deletedAt: null }),
+    ])
+    // Sample distinctOrganizationIds for person records in this tenant
+    const orgRows = await em.getConnection().execute(
+      `SELECT DISTINCT organization_id FROM customer_entities WHERE tenant_id = ? AND kind = 'person' AND deleted_at IS NULL LIMIT 10`,
+      [tenantId],
+    ) as Array<{ organization_id: string }>
+    return {
+      countByTenantOnly: byTenantOnly,
+      countByTenantAndOrg: byBoth,
+      organizationIdsInCrm: orgRows.map(r => r.organization_id),
+      authOrganizationId: organizationId,
+    }
+  })
+
+  // Step 5b: channel organizationId
+  result.step5b_channelOrgs = await safeQuery('channelOrgs', async () => {
+    const rows = await em.getConnection().execute(
+      `SELECT id, organization_id, user_id FROM communication_channels WHERE tenant_id = ? AND provider_key = 'office365' AND deleted_at IS NULL LIMIT 5`,
+      [tenantId],
+    ) as Array<{ id: string; organization_id: string | null; user_id: string | null }>
+    return rows
+  })
+
+  // Step 5c: findWithDecryption with exact scope
+  result.step5c_crmPersonsDecrypted = await safeQuery('crmPersons', async () => {
     const persons = await findWithDecryption(em, CustomerEntity, {
       tenantId,
       organizationId,
@@ -131,17 +154,17 @@ export async function GET(request: Request): Promise<Response> {
     return { exists: rows.length > 0 }
   })
 
-  // Step 7: Messages / MCL counts
+  // Step 7: Messages / MCL counts (raw with ? placeholders)
   result.step7_messageChain = await safeQuery('messageChain', async () => {
     const msgCount = await conn.execute(
       `SELECT count(*)::int AS cnt FROM messages
-       WHERE tenant_id = $1 AND organization_id = $2 AND idempotency_key IS NOT NULL`,
-      [tenantId, organizationId],
+       WHERE tenant_id = ? AND idempotency_key IS NOT NULL`,
+      [tenantId],
     ) as Array<{ cnt: number }>
     const mclCount = await conn.execute(
       `SELECT count(*)::int AS cnt FROM message_channel_links
-       WHERE tenant_id = $1 AND organization_id = $2 AND provider_key = 'office365'`,
-      [tenantId, organizationId],
+       WHERE tenant_id = ? AND provider_key = 'office365'`,
+      [tenantId],
     ) as Array<{ cnt: number }>
     return {
       messagesWithIdempotencyKey: msgCount[0]?.cnt ?? 0,
