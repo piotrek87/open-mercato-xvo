@@ -87,9 +87,8 @@ export async function buildEmailThreadRecords(
       'id', 'channel_id', 'external_conversation_id', 'subject',
       'tenant_id', 'organization_id', 'created_at', 'updated_at',
     ]
-    const ecN = ecCols.length
     const ecValueClauses = uniqueConversationKeys
-      .map((_, i) => '(' + ecCols.map((_, j) => `$${i * ecN + j + 1}`).join(', ') + ')')
+      .map(() => '(' + ecCols.map(() => '?').join(', ') + ')')
       .join(', ')
     const ecParams: unknown[] = uniqueConversationKeys.flatMap(key => [
       randomUUID(),
@@ -128,9 +127,8 @@ export async function buildEmailThreadRecords(
       'status', 'is_draft', 'sent_at',
       'tenant_id', 'organization_id', 'idempotency_key', 'created_at', 'updated_at',
     ]
-    const msgN = msgCols.length
     const msgValueClauses = relevant
-      .map((_, i) => '(' + msgCols.map((_, j) => `$${i * msgN + j + 1}`).join(', ') + ')')
+      .map(() => '(' + msgCols.map(() => '?').join(', ') + ')')
       .join(', ')
     const msgParams: unknown[] = relevant.flatMap(e => {
       const convKey = e.conversationId ?? `msg:${e.externalId}`
@@ -176,9 +174,8 @@ export async function buildEmailThreadRecords(
       'channel_payload', 'channel_metadata',
       'delivery_status', 'tenant_id', 'organization_id', 'created_at',
     ]
-    const mclN = mclCols.length
     const mclValueClauses = relevant
-      .map((_, i) => '(' + mclCols.map((_, j) => `$${i * mclN + j + 1}`).join(', ') + ')')
+      .map(() => '(' + mclCols.map(() => '?').join(', ') + ')')
       .join(', ')
 
     const mclParams: unknown[] = relevant.flatMap(e => {
@@ -263,7 +260,6 @@ export async function buildEmailThreadRecords(
       'source', 'external_message_id', 'channel_provider_key',
       'pinned', 'created_at', 'updated_at',
     ] as const
-    const ciN = ciCols.length
 
     const seenCiKeys = new Set<string>()
     const ciData: Array<Parameters<typeof Array.prototype.push>[0][]> = []
@@ -306,7 +302,7 @@ export async function buildEmailThreadRecords(
     if (ciData.length === 0) return
 
     const ciValueClauses = ciData
-      .map((_, i) => '(' + ciCols.map((_, j) => `$${i * ciN + j + 1}`).join(', ') + ')')
+      .map(() => '(' + ciCols.map(() => '?').join(', ') + ')')
       .join(', ')
     const ciParams = ciData.flat()
 

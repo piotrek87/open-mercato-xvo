@@ -29,7 +29,6 @@ import { randomUUID } from 'crypto'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { CustomerEntity } from '@open-mercato/core/modules/customers/data/entities'
-import { ActivityLink } from '../../activities/data/entities'
 
 // Mirrors SOFT_LIMIT_LINKS_PER_ACTIVITY = 10 from the Activities API route.
 // One consistent cap across manual and auto-created links.
@@ -198,12 +197,26 @@ export async function autoLinkActivityToCustomers(
     else personsByActivity.set(link.activityId, [link.entityId])
   }
 
-  // Phase 1: insert person links
+  // Phase 1: insert person links — raw SQL so ON CONFLICT DO NOTHING is guaranteed.
+  // em.upsertMany with onConflictAction:'ignore' throws on duplicates in this MikroORM version.
   try {
-    await em.upsertMany(ActivityLink, personLinks, {
-      onConflictAction: 'ignore',
-      disableIdentityMap: true,
-    })
+    const alCols = [
+      'id', 'activity_id', 'entity_type', 'entity_id',
+      'is_primary', 'organization_id', 'tenant_id', 'created_at', 'created_by_user_id',
+    ]
+    const alPlaceholders = personLinks
+      .map(() => '(' + alCols.map(() => '?').join(', ') + ')')
+      .join(', ')
+    const alParams = personLinks.flatMap(l => [
+      l.id, l.activityId, l.entityType, l.entityId,
+      l.isPrimary, l.organizationId, l.tenantId, l.createdAt, l.createdByUserId,
+    ])
+    await em.getConnection().execute(
+      `INSERT INTO activity_links (${alCols.join(', ')})
+       VALUES ${alPlaceholders}
+       ON CONFLICT DO NOTHING`,
+      alParams,
+    )
   } catch (err) {
     console.warn(
       '[channel_office365] autoLinkActivityToCustomers (persons) failed:',
@@ -217,15 +230,13 @@ export async function autoLinkActivityToCustomers(
   try {
     const primaryLinkEntries = [...firstPersonByActivity.entries()]
     if (primaryLinkEntries.length > 0) {
-      const valuePlaceholders = primaryLinkEntries
-        .map((_, i) => `($${i * 2 + 1}::uuid, $${i * 2 + 2}::uuid)`)
-        .join(', ')
+      const valuePlaceholders = primaryLinkEntries.map(() => '(?, ?)').join(', ')
       await em.getConnection().execute(
         `UPDATE activities AS a
          SET linked_entity_type = 'customers:person',
-             linked_entity_id    = d.person_id
+             linked_entity_id    = d.person_id::uuid
          FROM (VALUES ${valuePlaceholders}) AS d(activity_id, person_id)
-         WHERE a.id = d.activity_id
+         WHERE a.id = d.activity_id::uuid
            AND a.linked_entity_id IS NULL`,
         primaryLinkEntries.flat(),
       )
@@ -241,12 +252,13 @@ export async function autoLinkActivityToCustomers(
   try {
     const personIds = [...new Set(personLinks.map(l => l.entityId))]
 
+    const personPlaceholders = personIds.map(() => '?').join(', ')
     const rows = await em.getConnection().execute(
       `SELECT customer_entity_id AS person_id, company_entity_id AS company_id
        FROM customer_person_profiles
-       WHERE customer_entity_id = ANY($1)
+       WHERE customer_entity_id IN (${personPlaceholders})
          AND company_entity_id IS NOT NULL`,
-      [personIds],
+      personIds,
     ) as Array<{ person_id: string; company_id: string }>
 
     if (rows.length > 0) {
@@ -274,10 +286,23 @@ export async function autoLinkActivityToCustomers(
       }
 
       if (companyLinks.length > 0) {
-        await em.upsertMany(ActivityLink, companyLinks, {
-          onConflictAction: 'ignore',
-          disableIdentityMap: true,
-        })
+        const alCols2 = [
+          'id', 'activity_id', 'entity_type', 'entity_id',
+          'is_primary', 'organization_id', 'tenant_id', 'created_at', 'created_by_user_id',
+        ]
+        const alPlaceholders2 = companyLinks
+          .map(() => '(' + alCols2.map(() => '?').join(', ') + ')')
+          .join(', ')
+        const alParams2 = companyLinks.flatMap(l => [
+          l.id, l.activityId, l.entityType, l.entityId,
+          l.isPrimary, l.organizationId, l.tenantId, l.createdAt, l.createdByUserId,
+        ])
+        await em.getConnection().execute(
+          `INSERT INTO activity_links (${alCols2.join(', ')})
+           VALUES ${alPlaceholders2}
+           ON CONFLICT DO NOTHING`,
+          alParams2,
+        )
       }
     }
   } catch (err) {
