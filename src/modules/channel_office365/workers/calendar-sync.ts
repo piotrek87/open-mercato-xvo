@@ -286,6 +286,7 @@ async function syncChannel(
             existing.allDay = event.isAllDay ?? false
             existing.participants = participants.length > 0 ? participants : null
             existing.metadata = metadata
+            existing.visibility = 'team'
             existing.lastSyncedAt = new Date()
             existing.updatedAt = new Date()
             pendingLinks.push({ entity: existing, participants })

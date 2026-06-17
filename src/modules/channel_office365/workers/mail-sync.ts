@@ -335,6 +335,7 @@ function upsertMailActivity(
     existing.occurredAt = occurredAt
     existing.participants = participants.length > 0 ? participants : null
     existing.metadata = metadata
+    existing.visibility = 'team'
     existing.lastSyncedAt = new Date()
     existing.updatedAt = new Date()
     return { entity: existing, participants }
