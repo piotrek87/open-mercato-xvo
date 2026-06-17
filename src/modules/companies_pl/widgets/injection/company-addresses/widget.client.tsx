@@ -24,6 +24,21 @@ type AddressItem = {
   purpose: string | null
 }
 
+type PreviewAddress = {
+  id?: string
+  name?: string | null
+  addressLine1?: string
+  address_line1?: string
+  buildingNumber?: string | null
+  building_number?: string | null
+  city?: string | null
+  postalCode?: string | null
+  postal_code?: string | null
+  country?: string | null
+  isPrimary?: boolean
+  is_primary?: boolean
+}
+
 type AddressesResponse = {
   items?: AddressItem[]
   data?: AddressItem[]
@@ -40,25 +55,36 @@ type NewAddressForm = {
 
 const EMPTY_FORM: NewAddressForm = { name: '', addressLine1: '', city: '', postalCode: '', country: 'PL' }
 
-function formatAddress(addr: AddressItem): string {
+function formatAddress(line1: string | null | undefined, city: string | null | undefined, postal: string | null | undefined, country: string | null | undefined): string {
   const parts: string[] = []
-  if (addr.address_line1) {
-    parts.push(addr.building_number ? `${addr.address_line1} ${addr.building_number}` : addr.address_line1)
-  }
-  if (addr.address_line2) parts.push(addr.address_line2)
-  if (addr.postal_code || addr.city) parts.push([addr.postal_code, addr.city].filter(Boolean).join(' '))
-  if (addr.country) parts.push(addr.country)
+  if (line1) parts.push(line1)
+  if (postal || city) parts.push([postal, city].filter(Boolean).join(' '))
+  if (country) parts.push(country)
   return parts.join(', ')
+}
+
+function isDetailData(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false
+  const d = data as Record<string, unknown>
+  return typeof d.customFields === 'object' && d.customFields !== null
 }
 
 export default function CompanyAddressesWidget({
   context,
   data,
 }: InjectionWidgetComponentProps<{ companyId?: string | null }, unknown>) {
-  const companyId =
-    context?.companyId ??
-    (data as { company?: { id?: string } } | undefined)?.company?.id ??
-    null
+  const detailMode = isDetailData(data)
+
+  const companyId = detailMode
+    ? (data as { company?: { id?: string } }).company?.id ?? context?.companyId ?? null
+    : context?.companyId ?? null
+
+  const isCreateMode = !detailMode && !companyId
+
+  // In create mode: preview addresses from form state (populated by lookup widget via onDataChange)
+  const previewAddresses = isCreateMode
+    ? (((data as Record<string, unknown> | undefined)?.addresses ?? []) as PreviewAddress[])
+    : null
 
   const [addresses, setAddresses] = React.useState<AddressItem[] | null>(null)
   const [loading, setLoading] = React.useState(false)
@@ -87,7 +113,14 @@ export default function CompanyAddressesWidget({
   }, [companyId])
 
   React.useEffect(() => {
-    void fetchAddresses()
+    if (!isCreateMode) void fetchAddresses()
+  }, [isCreateMode, fetchAddresses])
+
+  // Refresh when lookup widget saves an address via POST
+  React.useEffect(() => {
+    const handler = () => void fetchAddresses()
+    window.addEventListener('companies_pl:address-saved', handler)
+    return () => window.removeEventListener('companies_pl:address-saved', handler)
   }, [fetchAddresses])
 
   const handleDelete = React.useCallback(
@@ -150,6 +183,41 @@ export default function CompanyAddressesWidget({
     [companyId, form, fetchAddresses],
   )
 
+  // ── CREATE MODE ─────────────────────────────────────────────────────────────
+  if (isCreateMode) {
+    if (!previewAddresses || previewAddresses.length === 0) return null
+    return (
+      <div className="space-y-2">
+        <p className="text-xs text-muted-foreground">Adresy z rejestru — zostaną przypisane po zapisaniu firmy</p>
+        {previewAddresses.map((addr, i) => {
+          const line1 = addr.addressLine1 ?? addr.address_line1
+          const city = addr.city
+          const postal = addr.postalCode ?? addr.postal_code
+          const country = addr.country
+          const primary = addr.isPrimary ?? addr.is_primary
+          return (
+            <div key={addr.id ?? i} className="flex items-start gap-3 rounded-lg border border-dashed p-4">
+              <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1 space-y-0.5">
+                <div className="flex items-center gap-2">
+                  {addr.name && <span className="text-sm font-medium">{addr.name}</span>}
+                  {primary && (
+                    <span className="flex items-center gap-0.5 text-xs text-muted-foreground">
+                      <Star className="h-3 w-3" />
+                      główny
+                    </span>
+                  )}
+                </div>
+                <p className="text-sm text-muted-foreground">{formatAddress(line1, city, postal, country)}</p>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
+  // ── EDIT / DETAIL MODE ───────────────────────────────────────────────────────
   if (!companyId) return null
 
   const count = addresses?.length ?? 0
@@ -288,7 +356,9 @@ export default function CompanyAddressesWidget({
                     </span>
                   )}
                 </div>
-                <p className="text-sm text-muted-foreground">{formatAddress(addr)}</p>
+                <p className="text-sm text-muted-foreground">
+                  {formatAddress(addr.address_line1, addr.city, addr.postal_code, addr.country)}
+                </p>
               </div>
               <Button
                 type="button"

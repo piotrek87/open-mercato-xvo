@@ -91,8 +91,7 @@ export default function CompanyLookupWidget({
   const source = (data ?? context?.data) as FormValues | CompanyOverview | undefined
   const isDetail = source ? isDetailContext(source) : false
   const companyId = isDetail && source ? (source as CompanyOverview).company?.id : null
-  const isCreateWithAddresses =
-    !isDetail && pendingAddresses && (pendingAddresses.residenceAddress || pendingAddresses.workingAddress)
+  const isCreateWithAddresses = false
 
   React.useEffect(() => {
     if (isDetail && pendingAddresses && pendingAddresses.companyId !== companyId) setPendingAddresses(null)
@@ -247,16 +246,46 @@ export default function CompanyLookupWidget({
       if (typeof name === 'string' && name.trim() && (formData.displayName == null || String(formData.displayName).trim() === '')) {
         next.displayName = name.trim()
       }
-      onDataChange(next)
-      if (result.residenceAddress?.trim() || result.workingAddress?.trim()) {
-        setPendingAddresses({
-          companyId: '',
-          ...(result.residenceAddress?.trim() && { residenceAddress: result.residenceAddress.trim() }),
-          ...(result.workingAddress?.trim() && { workingAddress: result.workingAddress.trim() }),
+      // Auto-populate addresses into form state so the Adresy tile section displays them immediately
+      const prevAddresses = Array.isArray((formData as Record<string, unknown>).addresses)
+        ? ((formData as Record<string, unknown>).addresses as Array<Record<string, unknown>>)
+        : []
+      const toAdd: Array<Record<string, unknown>> = []
+      if (result.residenceAddress?.trim()) {
+        const parsed = parsePolishAddress(result.residenceAddress.trim(), 'PL')
+        toAdd.push({
+          id: 'wl_residence',
+          name: 'Siedziba (z rejestru WL)',
+          addressLine1: parsed.addressLine1.slice(0, 300),
+          buildingNumber: parsed.buildingNumber ?? undefined,
+          city: parsed.city ?? undefined,
+          postalCode: parsed.postalCode ?? undefined,
+          country: parsed.country,
+          isPrimary: prevAddresses.length === 0,
         })
-      } else {
-        setPendingAddresses(null)
       }
+      if (result.workingAddress?.trim()) {
+        const parsed = parsePolishAddress(result.workingAddress.trim(), 'PL')
+        toAdd.push({
+          id: 'wl_working',
+          name: 'Adres rejestracyjny (z rejestru WL)',
+          addressLine1: parsed.addressLine1.slice(0, 300),
+          buildingNumber: parsed.buildingNumber ?? undefined,
+          city: parsed.city ?? undefined,
+          postalCode: parsed.postalCode ?? undefined,
+          country: parsed.country,
+          isPrimary: false,
+        })
+      }
+      const merged = [...prevAddresses]
+      for (const addr of toAdd) {
+        if (!merged.some((a) => String(a.addressLine1).toLowerCase() === String(addr.addressLine1).toLowerCase())) {
+          merged.push(addr)
+        }
+      }
+      ;(next as Record<string, unknown>).addresses = merged
+      onDataChange(next)
+      setPendingAddresses(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nie udało się pobrać danych.')
     } finally {
@@ -366,6 +395,7 @@ export default function CompanyLookupWidget({
           return next
         })
         setAddressMessage('Adres zapisany w systemie.')
+        window.dispatchEvent(new CustomEvent('companies_pl:address-saved'))
         const onAddressAdded = (context as { onAddressAdded?: () => void })?.onAddressAdded
         if (typeof onAddressAdded === 'function') onAddressAdded()
         router.refresh()
