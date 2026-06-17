@@ -118,6 +118,7 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'portal', from: '@open-mercato/core' },
   { id: 'activities', from: '@app' },
   { id: 'channel_office365', from: '@app' },
+  { id: 'companies_pl', from: '@app' },
   {
     id: 'example',
     from: '@app',
