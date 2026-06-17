@@ -3,8 +3,12 @@ import { Migration } from '@mikro-orm/migrations';
 export class Migration20260615000000_activities extends Migration {
 
   override async up(): Promise<void> {
+    // Renamed from Migration20260615_activities to enforce correct run order
+    // (the underscore suffix sorted after the 131325 migration that has a FK to this table).
+    // All statements are idempotent so this is safe on existing DBs.
+
     this.addSql(`
-      create table "activities" (
+      create table if not exists "activities" (
         "id" uuid not null default gen_random_uuid(),
         "organization_id" uuid not null,
         "tenant_id" uuid not null,
@@ -41,26 +45,25 @@ export class Migration20260615000000_activities extends Migration {
       );
     `);
 
-    // Composite indexes per spec
     this.addSql(`
-      create index "activities_entity_timeline_idx"
+      create index if not exists "activities_entity_timeline_idx"
       on "activities" ("organization_id", "tenant_id", "linked_entity_type", "linked_entity_id", "due_at", "occurred_at", "created_at")
       where deleted_at is null;
     `);
 
     this.addSql(`
-      create index "activities_owner_idx"
+      create index if not exists "activities_owner_idx"
       on "activities" ("organization_id", "tenant_id", "owner_user_id", "status", "due_at")
       where deleted_at is null;
     `);
 
     this.addSql(`
-      create index "activities_type_status_idx"
+      create index if not exists "activities_type_status_idx"
       on "activities" ("organization_id", "tenant_id", "activity_type", "status", "deleted_at");
     `);
 
     this.addSql(`
-      create index "activities_overdue_idx"
+      create index if not exists "activities_overdue_idx"
       on "activities" ("organization_id", "tenant_id", "due_at", "status")
       where lifecycle_mode = 'task'
         and status in ('not_started', 'in_progress')
@@ -68,47 +71,58 @@ export class Migration20260615000000_activities extends Migration {
     `);
 
     this.addSql(`
-      create index "activities_org_tenant_idx"
+      create index if not exists "activities_org_tenant_idx"
       on "activities" ("organization_id", "tenant_id", "created_at" desc)
       where deleted_at is null;
     `);
 
-    // Partial unique index for external sync deduplication
     this.addSql(`
-      create unique index "activities_external_dedup_idx"
+      create unique index if not exists "activities_external_dedup_idx"
       on "activities" ("organization_id", "external_id", "external_provider")
       where external_id is not null and deleted_at is null;
     `);
 
-    // Check constraints
+    // PostgreSQL does not support ADD CONSTRAINT IF NOT EXISTS — use DO block instead
     this.addSql(`
-      alter table "activities"
-        add constraint "activities_entity_link_check"
-        check (
-          (linked_entity_type is null and linked_entity_id is null) or
-          (linked_entity_type is not null and linked_entity_id is not null)
-        );
+      do $$ begin
+        alter table "activities"
+          add constraint "activities_entity_link_check"
+          check (
+            (linked_entity_type is null and linked_entity_id is null) or
+            (linked_entity_type is not null and linked_entity_id is not null)
+          );
+      exception when duplicate_object then null;
+      end $$;
     `);
 
     this.addSql(`
-      alter table "activities"
-        add constraint "activities_external_link_check"
-        check (
-          (external_id is null and external_provider is null) or
-          (external_id is not null and external_provider is not null)
-        );
+      do $$ begin
+        alter table "activities"
+          add constraint "activities_external_link_check"
+          check (
+            (external_id is null and external_provider is null) or
+            (external_id is not null and external_provider is not null)
+          );
+      exception when duplicate_object then null;
+      end $$;
     `);
 
     this.addSql(`
-      alter table "activities"
-        add constraint "activities_priority_range_check"
-        check (priority is null or (priority >= 0 and priority <= 100));
+      do $$ begin
+        alter table "activities"
+          add constraint "activities_priority_range_check"
+          check (priority is null or (priority >= 0 and priority <= 100));
+      exception when duplicate_object then null;
+      end $$;
     `);
 
     this.addSql(`
-      alter table "activities"
-        add constraint "activities_duration_check"
-        check (duration_minutes is null or (duration_minutes >= 0 and duration_minutes <= 1440));
+      do $$ begin
+        alter table "activities"
+          add constraint "activities_duration_check"
+          check (duration_minutes is null or (duration_minutes >= 0 and duration_minutes <= 1440));
+      exception when duplicate_object then null;
+      end $$;
     `);
   }
 
