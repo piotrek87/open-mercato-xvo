@@ -1,9 +1,37 @@
 # Sprint 7 — O365 Inbound Fix & Write-Back Architecture
 
-**Status:** DRAFT — awaiting review  
+**Status:** PHASE A CLOSED — `main`, commit `4aae1d9` (2026-06-18). Phase B DEFERRED.
 **Author:** Claude Code  
 **Date:** 2026-06-18  
 **Scope tego dokumentu:** Faza A (naprawa inbound) + architektura Fazy B (write-back). Implementacja Fazy B następuje po zatwierdzeniu Fazy A E2E.
+
+---
+
+## Status zamknięcia Fazy A
+
+### Zaimplementowane (Phase A)
+
+| # | Problem/zadanie | Commit | Status |
+|---|---|---|---|
+| P1 | `visibility='private'` → `'team'` w obu workerach | `15e512c` | DONE |
+| P2 | Primary link (`linkedEntityType`/`linkedEntityId`) na Activity | `8f7c921` | DONE |
+| P3 | ActivityLink dla firm (`customers:company`) | `dd374b7` | DONE |
+| P4 | `hasFeature()` zamiast `.includes()` | `15e512c` | DONE |
+| P5 | Partial unique index `customer_interactions_o365_dedup_idx` | `dd374b7` | DONE |
+| — | CI dual-write dla spotkań (persons) | `dd374b7` Sprint 7A | DONE |
+| — | CI dual-write dla emaili + MCL chain (persons) | `d6a2e5b` Sprint 7B | DONE |
+| — | CI dual-write dla firm (spotkania + maile) | `4aae1d9` Sprint 7C | DONE |
+| — | Interceptor deals page (strip dealId) | `4aae1d9` Sprint 7C | DONE |
+
+### Deferred
+
+| Item | Decyzja |
+|---|---|
+| Phase B (write-back CRM → O365) | Deferred do Sprint 7.5 / Sprint 9. Wymaga E2E Phase A + product decision Q3 (błąd write-back). |
+| Per-channel visibility policy | Deferred do Sprint 8. Infrastructure gotowa (channelState.capabilities.mail), brak UI. |
+| `activities.view_private` grant dla adminów | Mniejsze znaczenie po zmianie na `visibility='team'`. Deferred. |
+
+---
 
 ---
 

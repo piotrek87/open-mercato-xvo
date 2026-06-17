@@ -1,8 +1,9 @@
 # Project Context — my-app (OpenMercato)
 
 **Last updated:** 2026-06-18
-**Sessions:** Sprint 1–3B Activity Module implementation; Sprint 4A–4C Office 365 Calendar Sync; Sprint 5 — Unified M365 Connector + Email Sync + Activities UI Polish
+**Sessions:** Sprint 1–3B Activity Module implementation; Sprint 4A–4C Office 365 Calendar Sync; Sprint 5 — Unified M365 Connector + Email Sync + Activities UI Polish; Sprint 7 — O365 Inbound Fix + CustomerInteraction Visibility
 **Sprint 5 CLOSED 2026-06-18 — commit `b76b21a`**
+**Sprint 7 CLOSED 2026-06-18 — commit `4aae1d9`**
 
 ---
 
@@ -21,7 +22,7 @@
 
 **Stack:** Next.js App Router, TypeScript, MikroORM v7, Awilix DI, Zod, PostgreSQL.
 
-**Current state (2026-06-17):**
+**Current state (2026-06-18):**
 - Classic-mode OpenMercato scaffold with all built-in modules enabled (customers, sales, catalog, auth, integrations, etc.)
 - Sprint 1 of the Activity Module is **fully implemented and deployed** on branch `feat/activities-sprint1` (migrated, auth synced, encryption seeded)
 - Sprint 2 is **fully implemented** on branch `feat/activities-sprint2` (migrated, 54 tests passing)
@@ -31,6 +32,7 @@
 - Sprint 5 Phase 1 — **Unified Microsoft 365 Connector** — **IMPLEMENTED, awaiting environmental checkpoint** on branch `feat/activities-sprint4a`. providerKey renamed `office365_calendar` → `office365`, integrationId renamed `channel_office365_calendar` → `channel_office365`, capability-based channelState (`capabilities.calendar.*`, `capabilities.mail.*`), backward-compat read + self-migrating write, SQL migration `Migration20260617_channel_office365_unified.ts`. **Azure prerequisite: add new redirect URI `/api/communication_channels/oauth/office365/callback` before deploy.**
 - Sprint 5 Phase 2 — **O365 Email Sync** — **IMPLEMENTED** on branch `feat/activities-sprint4a`. Graph Mail Delta API (Inbox + SentItems), mail-sync worker, capability toggle API, manual trigger route, email capability row in admin UI. tsc: 0 errors. yarn generate: clean.
 - Sprint 5 Phase 3 — **Activities Widget UI Polish + CRM Backfill** — **IMPLEMENTED** on branch `feat/activities-sprint4a`. Week calendar strip (Mon–Sun, type-colored dots), sort/filter/pagination parity, Microsoft 365 tab name, timeline axis, API bugfix (visibility `$or` overwrite fixed), backfill subscriber on `customers.person.created`. **Sprint 5 CLOSED. Committed: `b76b21a`.**
+- Sprint 7 — **O365 Inbound Fix + CustomerInteraction Visibility** — **CLOSED on `main`. Commit `4aae1d9`.** Phase A fully shipped. Phase B (write-back) explicitly deferred. Full detail below in Sprint Status → Sprint 7.
 
 ---
 
@@ -47,13 +49,18 @@ The core model is a **unified `activities` table** — a single source of truth 
 
 **Decision is final. Do not propose alternative schemas.**
 
-### 2. CustomerInteraction Deprecation Strategy
+### 2. CustomerInteraction Dual-Write Strategy (Sprint 7)
 
-`CustomerInteraction` (existing module in `@open-mercato/core`) is **deprecated in favor of Activity**, but the migration is deferred to Sprint 8.
+`CustomerInteraction` (existing module in `@open-mercato/core`) is **deprecated in favor of Activity**, but the full migration is deferred to Sprint 8.
 
-- Sprint 1–7: both models coexist. No data migration yet.
-- Sprint 8: bridge/migration that reads CustomerInteraction and writes Activity.
-- Never extend CustomerInteraction as a long-term architecture.
+**Sprint 7 pivot:** Instead of immediately deprecating CustomerInteraction, Sprint 7 added a **dual-write layer** so that O365-synced Activities also create CustomerInteraction records. This was necessary because the built-in CRM "Aktywności" tab on person/company/deal pages reads from `customer_interactions` (not from `activities`). Without this dual-write, synced emails/meetings were invisible in the standard CRM UI even though they existed in the activities table.
+
+- `CustomerInteraction.source` = `'office365:calendar:<externalId>'` (meetings) | `'office365:mail:<externalId>'` (emails)
+- Partial unique index `customer_interactions_o365_dedup_idx` on `(entity_id, source, organization_id) WHERE source LIKE 'office365:%' AND deleted_at IS NULL`
+- Person CIs: `entity_id = personId`, visibility `'team'` (meetings) / `'shared'` (emails)
+- Company CIs: `entity_id = companyId`, same source, same visibility — makes emails/meetings visible on company page
+- Email CIs have `external_message_id = MessageChannelLink.id` — powers the "E-maile" tab thread view
+- Sprint 8: bridge/migration that reads remaining CustomerInteraction and writes Activity. **Never extend CustomerInteraction as a long-term architecture.**
 
 ### 3. Activity as Future Framework Package
 
@@ -522,6 +529,84 @@ After Sprint 8, Activity replaces CustomerInteraction entirely. Until then, both
 
 ---
 
+### Sprint 7 — O365 Inbound Fix + CustomerInteraction Visibility
+
+**Status: CLOSED — `main`, commit `4aae1d9`**
+**Date closed:** 2026-06-18
+**Spec:** `.ai/specs/2026-06-18-sprint7-o365-writeback.md`
+
+#### Phase A — Inbound Fix (DONE)
+
+All sub-phases completed and merged to main in multiple commits:
+
+| Commit | Change |
+|---|---|
+| `15e512c` | Phase A base — fix O365 synced activities not visible in timeline: `visibility='private'` → `'team'` in both workers; `hasFeature()` replaces `.includes()` in API; partial unique index `customer_interactions_o365_dedup_idx` migration |
+| `8f7c921` | Set primary link (`linkedEntityType`/`linkedEntityId`) on Activity after auto-linking to CRM customer (Phase 1b in `customer-linker.ts`) |
+| `467f5c1` | Backfill visibility on existing synced records; safe migration patterns |
+| `dd374b7` | **Sprint 7A** — CustomerInteraction dual-write for meetings: `customer-linker.ts` Phase 3 creates CI rows for persons (`office365:calendar:<id>`); `customer_interactions_o365_dedup_idx` partial unique index |
+| `d6a2e5b` | **Sprint 7B** — E-maile tab support: `email-thread-builder.ts` creates ExternalConversation → Message → MessageChannelLink → CustomerInteraction with `externalMessageId`; `external_conversations`, `messages`, `message_channel_links` tables populated |
+| `1ba7c07` | Fix duplicate-key crash in `em.upsertMany` → raw SQL `INSERT ... ON CONFLICT DO NOTHING`; fix all `$N` → `?` placeholders throughout |
+| `332363d` | Fix `$N` placeholder in Phase 3 CI insert for calendar meetings |
+| `4aae1d9` | **Sprint 7C** — company CIs (meetings + emails) + deals page interceptor |
+
+#### Sprint 7C Deliverables (2026-06-18)
+
+**Task 1 — Company CIs:**
+
+| File | Change |
+|---|---|
+| `src/modules/channel_office365/lib/customer-linker.ts` | New `AutoLinkResult` type `{ persons, companies }`. Phase 2 `personToCompany` hoisted to outer scope. `companiesByActivity` map built post-Phase-2. Phase 3 creates company CI rows (`entity_id=companyId`) alongside person CI rows. Return type changed to `AutoLinkResult`. |
+| `src/modules/channel_office365/lib/email-thread-builder.ts` | `buildEmailThreadRecords` accepts optional `matchedCompaniesByActivity` (6th param). Phase D creates company CIs with `external_message_id=mclId` so company page E-maile tab works. |
+| `src/modules/channel_office365/workers/mail-sync.ts` | Destructures `{ persons: matchedPersonsByActivity, companies: matchedCompaniesByActivity }` from `autoLinkActivityToCustomers`. Passes `matchedCompaniesByActivity` to `buildEmailThreadRecords`. |
+
+**Task 2 — Deals page interaction fix:**
+
+| File | Change |
+|---|---|
+| `src/modules/channel_office365/api/interceptors.ts` | **NEW.** `GET /api/customers/interactions` interceptor: removes `dealId` from query when `entityId` is also present. Root cause: `ActivitiesSection` sends both params; route applies them as AND; O365 CIs have `deal_id=NULL` → zero results. Counts endpoint only uses `entityId`, so counts were correct but list was empty. |
+
+#### Migrations in Sprint 7
+
+| File | Type | Content |
+|---|---|---|
+| `src/modules/channel_office365/migrations/Migration20260618_customer_interactions_ci.ts` | NEW | Partial unique index `customer_interactions_o365_dedup_idx` on `(entity_id, source, organization_id) WHERE source LIKE 'office365:%' AND deleted_at IS NULL` |
+| `src/modules/channel_office365/migrations/Migration20260618_external_conversations.ts` | NEW | Tables `external_conversations`, `messages`, `message_channel_links` (Sprint 7B) |
+
+> Note: No `activities` table migrations in Sprint 7 — all changes are to `customer_interactions` and the new messaging tables.
+
+#### Known Limitations (Sprint 7)
+
+1. **Existing CIs before Sprint 7C** — CIs created before Sprint 7C (Sprint 7A/7B) only have person CIs, not company CIs. A resync will create the missing company CIs via ON CONFLICT DO UPDATE.
+2. **Deals page shows ALL person interactions** — the interceptor strips `dealId`, so the "Historia interakcji" panel on a deal shows all of the linked person's interactions (not just those explicitly tagged to the deal). This is intentional and matches what the tab counts already showed.
+3. **No `deal_id` on O365 CIs** — O365 CIs are not associated with specific deals (`deal_id=NULL`). This is by design; there is no way to infer which deal an email belongs to from the O365 side.
+4. **Phase B (write-back) deferred** — CRM → O365 (outbound email/meeting creation) was explicitly deferred until Phase A E2E is verified.
+5. **Company CI shows all person emails** — if a company has multiple linked persons, all their emails appear in the company E-maile tab. No per-person filtering at company level yet.
+
+#### E2E Test Checklist (tomorrow)
+
+| Test | How | Expected |
+|---|---|---|
+| Person → Aktywności tab | Open person detail → Aktywności tab | Shows both meetings AND emails from O365 |
+| Person → E-maile tab | Open person detail → E-maile tab | Shows email threads with subject/preview, grouped by conversation |
+| Firma → Aktywności tab | Open company with linked person → Aktywności tab | Shows same meetings/emails as the person |
+| Firma → E-maile tab | Open company → E-maile tab | Shows email threads visible from linked person(s) |
+| Szansa → Aktywności tab | Open deal → select linked person → Historia interakcji | Shows ALL person interactions (not just deal-tagged ones). Counts match list count. |
+| Liczniki (tab counts) | Check tab counts on person/company/deal pages | All counts non-zero and consistent with list |
+| Brak duplikatów po resyncu | Click "Sync now" twice → count stays the same | ON CONFLICT DO UPDATE — no duplicate CIs |
+| Linkowanie (ActivityLink) | Run sync → check `activity_links` table | Person + company links created per activity |
+| Timeline widget | Open person detail → "Microsoft 365" tab | Activities visible in timeline widget (separate from CI-based tabs) |
+| Synchronizacja O365 | Sync → new email arrives in O365 → click "Sync now" | New CI appears in person/company Aktywności within seconds |
+
+#### Phase B — Write-Back (DEFERRED)
+
+Explicitly excluded from Sprint 7 scope per user decision (2026-06-18). Design documented in spec §7. Prerequisites:
+- Phase A E2E verified tomorrow
+- Product decision on conflict resolution policy (Q3 from spec §8)
+- Product decision on UX for "Wyślij przez Microsoft 365" toggle in LogActivityDrawer
+
+---
+
 ## Future Roadmap
 
 | Sprint | Scope | Status | Key deliverables |
@@ -530,7 +615,8 @@ After Sprint 8, Activity replaces CustomerInteraction entirely. Until then, both
 | **Sprint 4A–4C** | O365 Calendar Sync | **DONE** | OAuth2, Graph Delta API, worker, scheduler, manual sync, Mail.ReadWrite scope |
 | **Sprint 5** | Unified M365 Connector + Email Sync + UI polish | **DONE — `b76b21a`** | Capability-based channelState, email sync, week calendar strip, backfill subscriber |
 | **Sprint 6** | Activity Search & Smart Filters | Proposed | Full-text search, quick-filter chips, activity count badge on customer list |
-| **Sprint 7** | O365 Write-back (CRM → Calendar) | Proposed | Create/edit/cancel Activity → syncs to O365; conflict resolution policy needed first |
+| **Sprint 7 Phase A** | O365 Inbound Fix + CI Visibility | **DONE — `4aae1d9`** | visibility='team', primary link, company CI dual-write, deals interceptor, MCL chain for E-maile tab |
+| **Sprint 7 Phase B** | O365 Write-back (CRM → O365) | Deferred (next sprint after E2E) | Create email/meeting in OM → push to O365 via Graph API; conflict resolution policy needed |
 | **Sprint 8** | CustomerInteraction Deprecation | Proposed | Data migration CI → Activity, UI redirect, module disable flag |
 | **Sprint 9** | Activity Automation & Notifications | Proposed | Task due-date reminders, workflow triggers, auto-create from deal events |
 | **Sprint 10** | Reporting & Analytics | Proposed | Activity dashboard, team leaderboard, deal pipeline activity, CSV export |
@@ -603,24 +689,41 @@ See `.ai/specs/2026-06-18-sprint6-10-roadmap.md` for full Sprint 6–10 specific
 | 4C-5 | Multi-calendar support | Low priority — deferred to Sprint 11+. |
 | 4C-6 | Configurable sync window | Low priority — deferred to Sprint 10+. |
 
-## Next Session Starting Point — Sprint 6
+## Next Session Starting Point — Sprint 7 Phase B or Sprint 6
 
-**Proposed scope:** Activity Search & Smart Filters
-**Full spec:** `.ai/specs/2026-06-18-sprint6-10-roadmap.md` → Sprint 6 section
+**Sprint 7 Phase A CLOSED.** E2E testing scheduled for 2026-06-19.
 
-### Pre-Sprint 6 decisions needed
+### After E2E testing — decision fork
 
-1. **Search backend:** PostgreSQL `ilike` (simple, no infra) vs OpenMercato search indexer (full-text, requires Meilisearch). Recommendation: start with `ilike` on `subject` + `notes`.
-2. **O365 write-back priority:** If Sprint 7 (write-back) is more urgent than Sprint 6 (search), swap them. Write-back requires conflict resolution policy decision before code starts.
-3. **CustomerInteraction migration timing:** Confirm Sprint 8 is the right timing — the longer it waits, the more the two models diverge.
+Two options depending on E2E results:
 
-### What to load before starting Sprint 6
+**Option A — Sprint 7 Phase B (Write-back):** If Phase A tests pass cleanly → proceed to O365 write-back (CRM → O365 outbound). Read `.ai/specs/2026-06-18-sprint7-o365-writeback.md` §7 for design. Requires product decision on Q3 (error handling) before code.
 
-| Task | Load |
+**Option B — Sprint 6 (Search):** If write-back is lower priority → implement Activity Search & Smart Filters. Read `.ai/specs/2026-06-18-sprint6-10-roadmap.md` → Sprint 6 section.
+
+### What to load at start of next session
+
+1. Read `project-context.md` (this file) — start here always
+2. Check E2E results with user
+3. Based on sprint choice:
+
+| Sprint choice | Load |
 |---|---|
-| Add search to activities | `.ai/guides/search.md` |
-| Add quick-filter chips to widget | `src/modules/activities/widgets/injection/timeline/widget.client.tsx` |
-| Add search to list page | `src/modules/activities/backend/page.tsx` |
+| Sprint 7 Phase B (write-back) | `.ai/specs/2026-06-18-sprint7-o365-writeback.md` §7 + `src/modules/channel_office365/lib/customer-linker.ts` |
+| Sprint 6 (search) | `.ai/guides/search.md` + `src/modules/activities/widgets/injection/timeline/widget.client.tsx` |
+
+### Files changed in Sprint 7C (for quick orientation)
+
+```
+src/modules/channel_office365/
+├── api/
+│   └── interceptors.ts                    ← NEW (Task 2: deals page fix)
+├── lib/
+│   ├── customer-linker.ts                 ← MODIFIED (Task 1: AutoLinkResult, company CIs)
+│   └── email-thread-builder.ts            ← MODIFIED (Task 1: company CIs in Phase D)
+└── workers/
+    └── mail-sync.ts                       ← MODIFIED (Task 1: destructure AutoLinkResult)
+```
 
 ### Closed decisions (Sprint 1–5 complete) — do not re-open
 
@@ -651,6 +754,11 @@ See `.ai/specs/2026-06-18-sprint6-10-roadmap.md` for full Sprint 6–10 specific
 | O365 integrationId rename? | `channel_office365_calendar` → `channel_office365`. SQL migration updates `integration_credentials`. | Sprint 5 Phase 1 (Decision #12) |
 | O365 channelType change? | **REJECTED** — `channelType = 'calendar'` stays unchanged. No business value, additional risk. | Sprint 5 Phase 1 |
 | O365 `externalProvider` on Activity? | `'office365_calendar'` — NEVER changes post-creation. Is a semantic data-source identifier, not the channel providerKey. Decoupled from connector rename. | Sprint 5 Phase 1 (Decision #12) |
+| O365 synced activity visibility? | `'team'` (meetings + emails). Rationale: firmowe konto handlowca — historia komunikacji widoczna dla zespołu. Per-channel override deferred to Sprint 8. | Sprint 7 Phase A |
+| CustomerInteraction dual-write? | **YES** — O365 sync creates both Activity AND CustomerInteraction. CI source = `'office365:calendar:<id>'` or `'office365:mail:<id>'`. Dedup via partial unique index. | Sprint 7A/7B/7C |
+| Company CIs strategy? | Company CIs created with `entity_id=companyId` for same source. No separate conflict — different entity_id. Uses `personToCompany` map from `customer_person_profiles`. | Sprint 7C |
+| Deals page interactions — show all or only deal-tagged? | **All person interactions** — interceptor removes `dealId` when `entityId` present. O365 CIs have `deal_id=NULL`, so AND condition would return nothing. Counts already showed all → made list consistent. | Sprint 7C |
+| E-maile tab chain? | `ExternalConversation → Message → MessageChannelLink → CustomerInteraction(externalMessageId)`. MCL.id stored in CI.external_message_id. Core's `buildPersonEmailThreads` reads this chain. | Sprint 7B |
 
 ---
 
