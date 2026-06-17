@@ -1,6 +1,6 @@
 import { Migration } from '@mikro-orm/migrations';
 
-export class Migration20260615_activities extends Migration {
+export class Migration20260615000000_activities extends Migration {
 
   override async up(): Promise<void> {
     this.addSql(`
