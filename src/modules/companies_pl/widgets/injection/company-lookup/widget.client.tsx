@@ -107,6 +107,23 @@ export default function CompanyLookupWidget({
   const normalizeRegon = (v: string) => v.replace(/\D/g, '').slice(0, 14)
   const isValidRegon = (v: string) => v.length === 0 || v.length === 9 || v.length === 14
 
+  const saveCustomField = React.useCallback(
+    async (key: 'cf_nip' | 'cf_krs' | 'cf_regon', value: string | null) => {
+      if (!isDetail) return
+      const cid = (source as CompanyOverview | undefined)?.company?.id
+      if (!cid) return
+      const { ok, result: res } = await apiCall('/api/customers/companies', {
+        method: 'PUT',
+        body: JSON.stringify({ id: cid, [key]: value || null }),
+      })
+      if (!ok) {
+        const label = key === 'cf_nip' ? 'NIP' : key === 'cf_krs' ? 'KRS' : 'REGON'
+        setError((res as { error?: string } | undefined)?.error ?? `Nie udało się zapisać ${label}.`)
+      }
+    },
+    [isDetail, source],
+  )
+
   const handleSaveNip = React.useCallback(
     async (value: string | null) => {
       if (!source || !onDataChange) return
@@ -114,8 +131,9 @@ export default function CompanyLookupWidget({
       if (norm && norm.length !== 10) { setError('NIP musi mieć 10 cyfr.'); return }
       setError(null)
       setField(source as Record<string, unknown>, 'nip', norm, onDataChange as (next: Record<string, unknown>) => void, isDetail)
+      await saveCustomField('cf_nip', norm || null)
     },
-    [source, onDataChange, isDetail],
+    [source, onDataChange, isDetail, saveCustomField],
   )
 
   const handleSaveKrs = React.useCallback(
@@ -125,8 +143,9 @@ export default function CompanyLookupWidget({
       if (norm && norm.length !== 10) { setError('KRS musi mieć 10 cyfr.'); return }
       setError(null)
       setField(source as Record<string, unknown>, 'krs', norm, onDataChange as (next: Record<string, unknown>) => void, isDetail)
+      await saveCustomField('cf_krs', norm || null)
     },
-    [source, onDataChange, isDetail],
+    [source, onDataChange, isDetail, saveCustomField],
   )
 
   const handleSaveRegon = React.useCallback(
@@ -136,8 +155,9 @@ export default function CompanyLookupWidget({
       if (norm && !isValidRegon(norm)) { setError('REGON musi mieć 9 lub 14 cyfr.'); return }
       setError(null)
       setField(source as Record<string, unknown>, 'regon', norm, onDataChange as (next: Record<string, unknown>) => void, isDetail)
+      await saveCustomField('cf_regon', norm || null)
     },
-    [source, onDataChange, isDetail],
+    [source, onDataChange, isDetail, saveCustomField],
   )
 
   const handleFetch = React.useCallback(async () => {
@@ -184,18 +204,22 @@ export default function CompanyLookupWidget({
         onDataChange(next)
 
         const cid = overview.company?.id
-        if (cid && (result.name?.trim() || result.legalName?.trim())) {
-          const patch: Record<string, string> = {}
+        if (cid) {
+          const patch: Record<string, string | null> = {}
           if (result.name?.trim()) patch.displayName = result.name.trim()
           if (result.legalName?.trim()) patch.legalName = result.legalName.trim()
-          // Adaptation: raw fetch() → apiCall
-          const { ok: saveOk, result: saveResult } = await apiCall('/api/customers/companies', {
-            method: 'PUT',
-            body: JSON.stringify({ id: cid, ...patch }),
-          })
-          if (!saveOk) {
-            const errBody = saveResult as { error?: string } | undefined
-            setError(errBody?.error ?? 'Nie udało się zapisać nazwy firmy.')
+          if (result.nip != null) patch.cf_nip = String(result.nip)
+          if (result.krs != null) patch.cf_krs = String(result.krs)
+          if (result.regon != null) patch.cf_regon = String(result.regon)
+          if (Object.keys(patch).length > 0) {
+            const { ok: saveOk, result: saveResult } = await apiCall('/api/customers/companies', {
+              method: 'PUT',
+              body: JSON.stringify({ id: cid, ...patch }),
+            })
+            if (!saveOk) {
+              const errBody = saveResult as { error?: string } | undefined
+              setError(errBody?.error ?? 'Nie udało się zapisać danych firmy.')
+            }
           }
         }
 
