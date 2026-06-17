@@ -1,6 +1,8 @@
 /**
  * Auto-linking helpers: match activity participant emails against CRM CustomerEntity
  * primary emails and create ActivityLink records for persons AND their companies.
+ * Also creates CustomerInteraction records so synced O365 activities appear in the
+ * built-in "Aktywności" tab on CRM person/company profiles.
  *
  * CustomerEntity.primaryEmail is encrypted at rest with no hash field, so SQL
  * equality lookup is impossible. Strategy: decrypt all customer emails once per
@@ -15,6 +17,12 @@
  * "primary" CRM association) so built-in CRM widgets that query only by primary link
  * also show synced activities. Uses the first matched person per activity heuristic
  * (sender for inbox, first recipient for sent) — only when no primary link is set yet.
+ *
+ * CustomerInteraction (Phase 3): creates one CustomerInteraction per (activity, person)
+ * pair so that synced O365 emails/meetings are visible in the built-in "Aktywności"
+ * tab on the CRM person detail page. Uses an ON CONFLICT ... DO UPDATE to keep data
+ * fresh on re-sync. Dedup key: (entity_id, source, organization_id) with source =
+ * 'office365:mail:<externalId>' | 'office365:calendar:<externalId>'.
  */
 
 import { randomUUID } from 'crypto'
@@ -43,7 +51,19 @@ type LinkRow = {
 
 export type ActivityLinkPair = {
   activityId: string
-  participants: Array<{ email?: string }> | null | undefined
+  participants: Array<{ email?: string; name?: string; status?: string }> | null | undefined
+  // Optional: when provided, Phase 3 creates CustomerInteraction records.
+  // Workers always supply these; the backfill subscriber omits them.
+  externalId?: string | null         // O365 message/event ID — dedup key in CustomerInteraction.source
+  interactionType?: 'email' | 'meeting'
+  subject?: string | null
+  notes?: string | null
+  occurredAt?: Date | null           // email: received/sent datetime; meeting: nil (use dueAt)
+  dueAt?: Date | null                // meeting: start datetime; email: nil
+  allDay?: boolean
+  ownerUserId?: string | null
+  durationMinutes?: number | null
+  location?: string | null
 }
 
 /**
@@ -94,7 +114,8 @@ export async function buildEmailCustomerMap(
 
 /**
  * Batch-inserts ActivityLink rows for (activityId, participants) pairs where
- * participant emails match entries in emailMap.
+ * participant emails match entries in emailMap. Also creates CustomerInteraction
+ * records so synced activities appear in the built-in "Aktywności" tab.
  *
  * Phase 1: Links for matched persons (customers:person).
  * Phase 1b: Sets linkedEntityType/linkedEntityId on the Activity itself (primary link)
@@ -104,10 +125,13 @@ export async function buildEmailCustomerMap(
  *   so sender (inbox) or first recipient (sent) takes precedence.
  * Phase 2: Links for companies of matched persons (customers:company) — resolved
  *   via a single raw SQL lookup on customer_person_profiles.company_entity_id.
+ * Phase 3: CustomerInteraction records for each (activity, person) pair — one CI per
+ *   combination so the activity appears in the built-in Aktywności tab. ON CONFLICT
+ *   DO UPDATE refreshes stale data on re-sync.
  *
- * Uses em.upsertMany with onConflictAction: 'ignore' →
+ * Uses em.upsertMany with onConflictAction: 'ignore' for ActivityLink →
  *   INSERT ... ON CONFLICT DO NOTHING
- * so existing links are silently skipped without a prior SELECT.
+ * Uses raw SQL ON CONFLICT DO UPDATE for CustomerInteraction (partial unique index).
  *
  * Cap: up to AUTO_LINK_CAP (10) person links per activity.
  */
@@ -178,9 +202,9 @@ export async function autoLinkActivityToCustomers(
   // Phase 1b: set primary link on activities that don't have one yet.
   // Builds a VALUES table and does a single batch UPDATE — no N+1.
   try {
-    const pairs = [...firstPersonByActivity.entries()]
-    if (pairs.length > 0) {
-      const valuePlaceholders = pairs
+    const primaryLinkEntries = [...firstPersonByActivity.entries()]
+    if (primaryLinkEntries.length > 0) {
+      const valuePlaceholders = primaryLinkEntries
         .map((_, i) => `($${i * 2 + 1}::uuid, $${i * 2 + 2}::uuid)`)
         .join(', ')
       await em.getConnection().execute(
@@ -190,7 +214,7 @@ export async function autoLinkActivityToCustomers(
          FROM (VALUES ${valuePlaceholders}) AS d(activity_id, person_id)
          WHERE a.id = d.activity_id
            AND a.linked_entity_id IS NULL`,
-        pairs.flat(),
+        primaryLinkEntries.flat(),
       )
     }
   } catch (err) {
@@ -212,41 +236,170 @@ export async function autoLinkActivityToCustomers(
       [personIds],
     ) as Array<{ person_id: string; company_id: string }>
 
-    if (rows.length === 0) return
+    if (rows.length > 0) {
+      const personToCompany = new Map(rows.map(r => [r.person_id, r.company_id]))
+      const seenCompanyKeys = new Set<string>()
+      const companyLinks: LinkRow[] = []
 
-    const personToCompany = new Map(rows.map(r => [r.person_id, r.company_id]))
+      for (const link of personLinks) {
+        const companyId = personToCompany.get(link.entityId)
+        if (!companyId) continue
+        const key = `${link.activityId}:${companyId}`
+        if (seenCompanyKeys.has(key)) continue
+        seenCompanyKeys.add(key)
+        companyLinks.push({
+          id: randomUUID(),
+          activityId: link.activityId,
+          entityType: 'customers:company',
+          entityId: companyId,
+          isPrimary: false,
+          organizationId: scope.organizationId,
+          tenantId: scope.tenantId,
+          createdAt: now,
+          createdByUserId: null,
+        })
+      }
 
-    const seenCompanyKeys = new Set<string>()
-    const companyLinks: LinkRow[] = []
-
-    for (const link of personLinks) {
-      const companyId = personToCompany.get(link.entityId)
-      if (!companyId) continue
-      const key = `${link.activityId}:${companyId}`
-      if (seenCompanyKeys.has(key)) continue
-      seenCompanyKeys.add(key)
-      companyLinks.push({
-        id: randomUUID(),
-        activityId: link.activityId,
-        entityType: 'customers:company',
-        entityId: companyId,
-        isPrimary: false,
-        organizationId: scope.organizationId,
-        tenantId: scope.tenantId,
-        createdAt: now,
-        createdByUserId: null,
-      })
+      if (companyLinks.length > 0) {
+        await em.upsertMany(ActivityLink, companyLinks, {
+          onConflictAction: 'ignore',
+          disableIdentityMap: true,
+        })
+      }
     }
-
-    if (companyLinks.length === 0) return
-
-    await em.upsertMany(ActivityLink, companyLinks, {
-      onConflictAction: 'ignore',
-      disableIdentityMap: true,
-    })
   } catch (err) {
     console.warn(
       '[channel_office365] autoLinkActivityToCustomers (companies) failed:',
+      err instanceof Error ? err.message : err,
+    )
+  }
+
+  // Phase 3: create/update CustomerInteraction for each (activity, person) pair.
+  // Source key embeds the O365 ID so re-syncs hit the ON CONFLICT branch and update
+  // rather than inserting duplicates. The partial unique index
+  // customer_interactions_o365_dedup_idx covers (entity_id, source, organization_id)
+  // WHERE source LIKE 'office365:%' AND deleted_at IS NULL.
+  try {
+    const pairByActivityId = new Map(pairs.map(p => [p.activityId, p]))
+
+    // Build one CI row per (personLink, activity) combination — deduplicated by seen set.
+    const seenCiKeys = new Set<string>()
+    type CiRow = {
+      id: string
+      entityId: string
+      interactionType: string
+      title: string | null
+      body: string | null
+      occurredAt: Date | null
+      ownerUserId: string | null
+      visibility: string
+      status: string
+      source: string
+      durationMinutes: number | null
+      location: string | null
+      allDay: boolean
+      participants: string | null    // JSON-serialised for JSONB insert
+      channelProviderKey: string | null
+    }
+    const ciRows: CiRow[] = []
+
+    for (const link of personLinks) {
+      const pair = pairByActivityId.get(link.activityId)
+      // Skip CI creation for pairs without full metadata (e.g. backfill subscriber)
+      if (!pair?.externalId || !pair.interactionType) continue
+
+      const source = pair.interactionType === 'email'
+        ? `office365:mail:${pair.externalId}`
+        : `office365:calendar:${pair.externalId}`
+
+      const ciKey = `${link.entityId}:${source}`
+      if (seenCiKeys.has(ciKey)) continue
+      seenCiKeys.add(ciKey)
+
+      const eventTime = pair.occurredAt ?? pair.dueAt ?? null
+      const status = (pair.interactionType === 'email' || (eventTime && eventTime <= now))
+        ? 'done'
+        : 'planned'
+
+      ciRows.push({
+        id: randomUUID(),
+        entityId: link.entityId,
+        interactionType: pair.interactionType,
+        title: pair.subject ?? null,
+        body: pair.notes ?? null,
+        occurredAt: eventTime,
+        ownerUserId: pair.ownerUserId ?? null,
+        // Email uses 'shared' (channel-level visibility vocabulary); meeting uses 'team'
+        visibility: pair.interactionType === 'email' ? 'shared' : 'team',
+        status,
+        source,
+        durationMinutes: pair.durationMinutes ?? null,
+        location: pair.location ?? null,
+        allDay: pair.allDay ?? false,
+        participants: pair.participants != null ? JSON.stringify(pair.participants) : null,
+        channelProviderKey: pair.interactionType === 'email' ? 'office365' : null,
+      })
+    }
+
+    if (ciRows.length === 0) return
+
+    // Batch INSERT with ON CONFLICT DO UPDATE — refreshes title/body/time on re-sync.
+    // Uses the partial unique index: (entity_id, source, organization_id)
+    // WHERE source LIKE 'office365:%' AND deleted_at IS NULL.
+    const COLS = [
+      'id', 'organization_id', 'tenant_id', 'entity_id',
+      'interaction_type', 'title', 'body', 'occurred_at',
+      'author_user_id', 'owner_user_id', 'visibility', 'status',
+      'source', 'duration_minutes', 'location', 'all_day',
+      'participants', 'channel_provider_key', 'pinned', 'created_at', 'updated_at',
+    ] as const
+    const N = COLS.length
+
+    const valueClauses = ciRows
+      .map((_, i) => '(' + COLS.map((_, j) => `$${i * N + j + 1}`).join(', ') + ')')
+      .join(', ')
+
+    const params: unknown[] = ciRows.flatMap(r => [
+      r.id,
+      scope.organizationId,
+      scope.tenantId,
+      r.entityId,
+      r.interactionType,
+      r.title,
+      r.body,
+      r.occurredAt,
+      r.ownerUserId,  // author_user_id = same as owner
+      r.ownerUserId,
+      r.visibility,
+      r.status,
+      r.source,
+      r.durationMinutes,
+      r.location,
+      r.allDay,
+      r.participants,
+      r.channelProviderKey,
+      false,          // pinned
+      now,
+      now,
+    ])
+
+    await em.getConnection().execute(
+      `INSERT INTO customer_interactions (${COLS.join(', ')})
+       VALUES ${valueClauses}
+       ON CONFLICT (entity_id, source, organization_id)
+       WHERE source LIKE 'office365:%' AND deleted_at IS NULL
+       DO UPDATE SET
+         title              = EXCLUDED.title,
+         body               = EXCLUDED.body,
+         occurred_at        = EXCLUDED.occurred_at,
+         participants       = EXCLUDED.participants,
+         status             = EXCLUDED.status,
+         updated_at         = NOW()`,
+      params,
+    )
+  } catch (err) {
+    console.warn(
+      '[channel_office365] autoLinkActivityToCustomers (CustomerInteraction) failed:',
       err instanceof Error ? err.message : err,
     )
   }

@@ -270,7 +270,20 @@ async function syncChannelMail(
     if (emailMap.size > 0) {
       await autoLinkActivityToCustomers(
         em,
-        pendingLinks.map(({ entity, participants }) => ({ activityId: entity.id, participants })),
+        pendingLinks.map(({ entity, participants }) => ({
+          activityId: entity.id,
+          externalId: entity.externalId!,
+          interactionType: 'email' as const,
+          subject: entity.subject,
+          notes: entity.notes,
+          occurredAt: entity.occurredAt,
+          dueAt: entity.dueAt,
+          allDay: entity.allDay ?? false,
+          ownerUserId: entity.ownerUserId,
+          durationMinutes: entity.durationMinutes,
+          location: entity.location,
+          participants,
+        })),
         emailMap,
         scope,
       )
