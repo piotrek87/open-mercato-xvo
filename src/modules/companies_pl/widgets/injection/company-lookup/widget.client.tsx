@@ -311,9 +311,34 @@ export default function CompanyLookupWidget({
         return
       }
 
+      const addressLine1 = parsed.addressLine1.slice(0, 300)
+
+      // Deduplication: skip if identical address already exists for this company
+      const { ok: checkOk, result: existingResult } = await apiCall<{ items?: { address_line1: string }[] }>(
+        `/api/customers/addresses?entityId=${encodeURIComponent(pendingAddresses.companyId)}&pageSize=50`,
+      )
+      if (checkOk && existingResult) {
+        const needle = addressLine1.toLowerCase()
+        const isDuplicate = (existingResult.items ?? []).some(
+          (a) => typeof a.address_line1 === 'string' && a.address_line1.toLowerCase() === needle,
+        )
+        if (isDuplicate) {
+          setAddressMessage('Ten adres jest już przypisany do firmy.')
+          setPendingAddresses((prev) => {
+            if (!prev) return null
+            const next = { ...prev }
+            if (kind === 'residence') delete next.residenceAddress
+            else delete next.workingAddress
+            return !next.residenceAddress && !next.workingAddress ? null : next
+          })
+          setAddingAddress(null)
+          return
+        }
+      }
+
       const body: Record<string, unknown> = {
         entityId: pendingAddresses.companyId,
-        addressLine1: parsed.addressLine1.slice(0, 300),
+        addressLine1,
         country: parsed.country,
         name,
       }
@@ -324,7 +349,6 @@ export default function CompanyLookupWidget({
       if (companyScope?.tenantId) body.tenantId = companyScope.tenantId
 
       try {
-        // Adaptation: raw fetch() → apiCall
         const { ok, result: addrResult } = await apiCall('/api/customers/addresses', {
           method: 'POST',
           body: JSON.stringify(body),
