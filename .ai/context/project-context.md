@@ -1,7 +1,8 @@
 # Project Context — my-app (OpenMercato)
 
 **Last updated:** 2026-06-18
-**Sessions:** Sprint 1–3B Activity Module implementation; Sprint 4A–4C Office 365 Calendar Sync; Sprint 5 Phase 1 — Unified Microsoft 365 Connector
+**Sessions:** Sprint 1–3B Activity Module implementation; Sprint 4A–4C Office 365 Calendar Sync; Sprint 5 — Unified M365 Connector + Email Sync + Activities UI Polish
+**Sprint 5 CLOSED 2026-06-18 — commit `b76b21a`**
 
 ---
 
@@ -29,6 +30,7 @@
 - Sprint 4A+4B+4C — O365 calendar sync — **fully implemented and ready for merge** on branch `feat/activities-sprint4a`. 85 Activity records synced, `visibility: private`, scheduler running at 5m interval. Sync-now button + Mail.ReadWrite scope expansion added in Sprint 4C. tsc: clean (exit 0). Known tech debt: `em.flush()` inside upsert loop (non-blocking). **PR to main pending.**
 - Sprint 5 Phase 1 — **Unified Microsoft 365 Connector** — **IMPLEMENTED, awaiting environmental checkpoint** on branch `feat/activities-sprint4a`. providerKey renamed `office365_calendar` → `office365`, integrationId renamed `channel_office365_calendar` → `channel_office365`, capability-based channelState (`capabilities.calendar.*`, `capabilities.mail.*`), backward-compat read + self-migrating write, SQL migration `Migration20260617_channel_office365_unified.ts`. **Azure prerequisite: add new redirect URI `/api/communication_channels/oauth/office365/callback` before deploy.**
 - Sprint 5 Phase 2 — **O365 Email Sync** — **IMPLEMENTED** on branch `feat/activities-sprint4a`. Graph Mail Delta API (Inbox + SentItems), mail-sync worker, capability toggle API, manual trigger route, email capability row in admin UI. tsc: 0 errors. yarn generate: clean.
+- Sprint 5 Phase 3 — **Activities Widget UI Polish + CRM Backfill** — **IMPLEMENTED** on branch `feat/activities-sprint4a`. Week calendar strip (Mon–Sun, type-colored dots), sort/filter/pagination parity, Microsoft 365 tab name, timeline axis, API bugfix (visibility `$or` overwrite fixed), backfill subscriber on `customers.person.created`. **Sprint 5 CLOSED. Committed: `b76b21a`.**
 
 ---
 
@@ -504,22 +506,36 @@ After Sprint 8, Activity replaces CustomerInteraction entirely. Until then, both
 - Email Activity: `lifecycleMode: 'fact'`, `status: 'fact'`, `visibility: 'private'`, `sourceType: 'inbox' | 'sent'`
 - Delta cursors: `capabilities.mail.deltaToken` (Inbox), `capabilities.mail.sentItemsDeltaToken` (SentItems)
 
+#### Phase 3: Activities Widget UI Polish + CRM Backfill (CLOSED 2026-06-18)
+
+**Commit:** `b76b21a`
+
+| Area | Deliverable |
+|---|---|
+| Tab name | `groupLabel: 'Microsoft 365'` literal — `groupLabelKey` does not exist in `InjectionWidgetPlacement` type |
+| Week calendar strip | Mon–Sun tile view with type-colored dots per activity type, click-to-filter by day, prev/next week navigation (client-side — no API reload) |
+| Sort + filter + pagination | Sort toggle (newest/oldest), type filter chips (full registry, not just loaded page), total count badge, "Load more" cursor pagination (100 items/page) |
+| Timeline axis | Flex gutter approach: continuous vertical line + dot, no `absolute` positioning (avoids overflow clipping) |
+| DefaultActivityCard | Wrapped in `<Link href="/backend/activities/{id}">`, time shown in date when not midnight |
+| API bugfix | Visibility filter `$or` moved inside `$and` — was overwriting entity-link `$or` (caused all activities to show on every record regardless of entity) |
+| Backfill subscriber | `subscribers/customer-activity-backfill.ts` — `customers.person.created` → decrypt email → JSONB `@>` query on `activities.participants` → `autoLinkActivityToCustomers` (ON CONFLICT DO NOTHING). Closes the delta-token gap for retrospective linking. |
+
 ---
 
 ## Future Roadmap
 
 | Sprint | Scope | Status | Key deliverables |
 |---|---|---|---|
-| **Sprint 3A** | Activity creation UX | DONE | `LogActivityDrawer`, `InlineActivityComposer`, optimistic updates, standalone page |
-| **Sprint 3B** | Dictionary-backed types | DONE | `activity_type_definitions` table, Layer 3 registry merge, admin CRUD UI |
-| **Sprint 4A** | O365 calendar sync — core | DONE | Module scaffold, OAuth2, Graph Delta API, worker, scheduler |
-| **Sprint 4B** | O365 calendar sync — stability | DONE | seriesMaster guard, visibility:private, backfill, cancelled events, requires_reauth UX |
-| **Sprint 4C** | O365 calendar sync — poll-now + Mail.ReadWrite scope | DONE — Ready for merge | 4C-3 manual sync trigger + 4C-4 OAuth scope expansion (Mail.ReadWrite) |
-| **Sprint 5 Phase 1** | Unified M365 Connector refactor | IMPLEMENTED — checkpoint pending | providerKey/integrationId rename, capability-based channelState, SQL migration, Azure redirect URI |
-| **Sprint 5 Phase 2** | O365 Email Sync | IMPLEMENTED | Graph Mail Delta API, mail worker, capability toggle, Inbox + SentItems → Activity |
-| **Sprint 6** | Activity automation | Planned | Workflow triggers on activity events, auto-create activities from sales events |
-| **Sprint 7** | Reporting & analytics | Planned | Activity dashboard, team performance views, funnel metrics |
-| **Sprint 8** | CustomerInteraction migration | Planned | Bridge + migration to Activity; deprecate CustomerInteraction UI |
+| **Sprint 1–3B** | Activity module core + UX + types | **DONE** | Entity, API, widget, creation UX, optimistic updates, dynamic type registry |
+| **Sprint 4A–4C** | O365 Calendar Sync | **DONE** | OAuth2, Graph Delta API, worker, scheduler, manual sync, Mail.ReadWrite scope |
+| **Sprint 5** | Unified M365 Connector + Email Sync + UI polish | **DONE — `b76b21a`** | Capability-based channelState, email sync, week calendar strip, backfill subscriber |
+| **Sprint 6** | Activity Search & Smart Filters | Proposed | Full-text search, quick-filter chips, activity count badge on customer list |
+| **Sprint 7** | O365 Write-back (CRM → Calendar) | Proposed | Create/edit/cancel Activity → syncs to O365; conflict resolution policy needed first |
+| **Sprint 8** | CustomerInteraction Deprecation | Proposed | Data migration CI → Activity, UI redirect, module disable flag |
+| **Sprint 9** | Activity Automation & Notifications | Proposed | Task due-date reminders, workflow triggers, auto-create from deal events |
+| **Sprint 10** | Reporting & Analytics | Proposed | Activity dashboard, team leaderboard, deal pipeline activity, CSV export |
+
+See `.ai/specs/2026-06-18-sprint6-10-roadmap.md` for full Sprint 6–10 specifications, scope, prerequisites, and ordering rationale.
 
 ---
 
@@ -537,74 +553,76 @@ After Sprint 8, Activity replaces CustomerInteraction entirely. Until then, both
 
 6. **O365 write-back (CRM → calendar):** Before implementing 4C-1, design a bi-directional conflict resolution strategy: what happens when both sides change the same event between syncs? Who wins? This is a product decision, not a code decision.
 
-7. **O365 auto-link activities to CRM customers:** When a meeting attendee is an external customer contact, should the Activity be automatically linked via `ActivityLink`? Currently: no auto-linking (manual only). High business value, addressed in a future sprint (not Sprint 4C). Requires: email lookup in `customer_persons`, handling multiple matches, dedup of ActivityLink records.
+7. **O365 auto-link activities to CRM customers:** **RESOLVED (Sprint 5 Phase 3).** `subscribers/customer-activity-backfill.ts` — persistent subscriber on `customers.person.created` retroactively links all existing activities where `participants[].email` matches the new person's decrypted `primaryEmail`. Forward-looking: new activities are linked during sync by `customer-linker.ts` (`buildEmailCustomerMap` + `autoLinkActivityToCustomers`). Both paths use `ActivityLink` with ON CONFLICT DO NOTHING. Delta-token gap closed.
 
 ---
 
-## Next Session Starting Point
+## Sprint 5: CLOSED (2026-06-18)
 
-### Post-Sprint 5 — Activity Details & Sorting (IN PROGRESS 2026-06-18)
+**Last commit:** `b76b21a feat(activities+channel_office365): Sprint 5 — M365 email sync, activities UI polish, backfill linker`
+**Branch:** `feat/activities-sprint4a`
+**tsc:** 0 errors. yarn generate: clean. All migrations committed.
 
-**Working branch:** `feat/activities-sprint4a`
-**tsc:** 0 errors.
+### Deployment checklist (required before first live use on a new environment)
 
-**P1 DONE — Sortowanie Activities:**
-- Migration `Migration20260618_activities_metadata.ts`: `effective_date GENERATED ALWAYS AS (COALESCE(occurred_at, due_at, created_at)) STORED` + index `activities_effective_date_idx` + `metadata JSONB NULL`
-- Entity `Activity`: dodano `effectiveDate?: Date | null` (NEVER assign manually) + `metadata?: Record<string, unknown> | null`
-- API `api/route.ts`: cursor zmieniony na `{ id, d }` (effectiveDate), orderBy na `{ effectiveDate, id }`, cursor WHERE na `{ effectiveDate: { $lt/$gt } }`
-- Snapshot `.snapshot-open-mercato.json` zaktualizowany
-- **Wymaga: `yarn db:migrate` przed uruchomieniem**
+1. `yarn db:migrate` — applies (in order):
+   - `Migration20260616_channel_office365_backfill_visibility.ts`
+   - `Migration20260617_channel_office365_unified.ts` (providerKey + integrationId rename + channelState JSONB restructure)
+   - `Migration20260618_activities_metadata.ts` (`effective_date GENERATED STORED` + `metadata JSONB`)
+2. Azure Portal → add redirect URI: `<yourdomain>/api/communication_channels/oauth/office365/callback`
+3. Reconnect O365 in Settings → Integrations → Microsoft 365 (required after providerKey rename)
+4. Enable Email Sync in `/backend/channel_office365` → Email row → Enable toggle
+5. `yarn mercato auth sync-role-acls` — propagate any new RBAC features to existing tenants
 
-**P2 TODO — Meeting details:**
-- Dodać `isOnlineMeeting`, `onlineMeetingUrl` do `$select` w `graph-client.ts`
-- Zapisywać `bodyPreview → notes`, `organizer → participants` (status: 'organizer'), `metadata.{ teamsJoinUrl, isOnlineMeeting, webLink }`
-- Zaktualizować UI `/backend/activities/[id]/page.tsx`
+### Post-deployment E2E verification
 
-**P3 DONE — Email details:**
-- `graph-mail-client.ts`: dodano `bccRecipients`, `replyTo` do interfejsu + MAIL_SELECT
-- `mail-sync.ts`: `buildParticipants` przepisany — inbox: from+to+cc, sent: from+to+cc+bcc (max 10 to, 5 cc, 5 bcc); `metadata.hasAttachments`, `metadata.replyTo` (filtrowane — tylko gdy różni się od from)
-- `[id]/page.tsx`: `EmailSection` — From/To/CC/BCC/Reply-To/Preview + Inbox/Sent badge + attachments indicator
+| Check | How to verify |
+|---|---|
+| Calendar sync | Click "Sync now" on calendar row → Activities count increases |
+| Email sync | Enable mail capability → "Sync now" → `SELECT COUNT(*) FROM activities WHERE external_provider = 'office365_mail'` |
+| CRM auto-link | Open any customer person → "Microsoft 365" tab → linked activities visible |
+| Backfill | Add a new person to Customers → open their detail → Microsoft 365 tab shows historical activities |
+| Sort order | Activities list shows newest first; cursor pagination loads older items correctly |
+| Week calendar | Calendar strip shows dots for days with activities; clicking a day filters the list |
 
-**P4 TODO — Email body (pełna treść):**
-- Analiza: czy pobierać `body.content` zamiast `bodyPreview`
+### Closed decisions — Sprint 5 Phase 3
 
-### Closed decisions — metadata JSONB (2026-06-18)
+| Decision | Answer |
+|---|---|
+| `groupLabelKey` in injection-table? | Does not exist in framework `InjectionWidgetPlacement` type — use `groupLabel` literal string only |
+| Calendar navigation triggers API reload? | No — 100 items loaded upfront, week navigation and day-filter are client-side only |
+| Backfill subscriber location? | `channel_office365` module (not `activities`) — it is O365-specific email-matching logic |
+| Timeline axis implementation? | Flex gutter (no `absolute` positioning) — avoids overflow clipping issues in injected tab containers |
 
-`metadata JSONB NULL` na encji `Activity`:
-- Nie wpisywać provider-specific danych do głównego schematu
-- Wypełniane WYŁĄCZNIE przez sync workery (calendar-sync, mail-sync)
-- Nigdy nie ustawiać podczas ręcznego tworzenia Activity
-- Klucze: `{ teamsJoinUrl?, isOnlineMeeting?, webLink?, hasAttachments?, from?, to?, cc?, bcc? }`
+### Closed decisions — Sprint 4C scope (carried forward)
 
-**State:** All 11 files created/modified. Phase 2 fully implemented.
-Phase 1 checkpoint (Azure redirect URI + yarn db:migrate) still required before first use.
-
-**E2E test scenario:**
-1. Complete Phase 1 checkpoint (see above)
-2. `/backend/channel_office365` → find your connected channel
-3. Click "Enable" in the Email Sync row → verify 200 response + capability updated flash
-4. Click "Sync now" (email) → verify 202 response in Network tab
-5. Wait ~5s → refresh page → `capabilities.mail.lastSyncedAt` should be set
-6. Check Activities: `SELECT COUNT(*) FROM activities WHERE external_provider = 'office365_mail'`
-7. Verify inbox emails have `source_type = 'inbox'`, sent emails have `source_type = 'sent'`
-8. Verify scheduler fires at 15-minute interval (check scheduler admin or queue logs)
-
-**Rollback:**
-- Toggle email sync off: click "Disable" in UI → `capabilities.mail.enabled = false` → scheduler runs but worker skips all channels
-- No migration to roll back (no schema changes for Phase 2)
-
-### Closed decisions — Sprint 4C scope
-
-#### Deferred / out of scope for Sprint 4C
-
-| ID | Item | Decision |
+| ID | Item | Status |
 |---|---|---|
-| 4C-1 | Write-back Activity → O365 | Needs bi-directional conflict resolution strategy. Design discussion first. |
-| 4C-2 | Shared Activity / attendee resolution | Deferred. See Decision #11. Only reopen as 4C-2a (internal attendee enrichment in `participants` JSON) or separate auto-link sprint. |
-| 4C-5 | Multi-calendar support | Low priority — most users have one primary calendar. |
-| 4C-6 | Configurable sync window | Low priority — power user feature, −7d/+90d is fine. |
+| 4C-1 | Write-back Activity → O365 | Deferred → Sprint 7. Requires conflict resolution policy decision first. |
+| 4C-2 | Shared Activity / attendee resolution | Permanently deferred. See Decision #11. |
+| 4C-5 | Multi-calendar support | Low priority — deferred to Sprint 11+. |
+| 4C-6 | Configurable sync window | Low priority — deferred to Sprint 10+. |
 
-### Closed decisions (Sprint 1–5 Phase 1) — do not re-open
+## Next Session Starting Point — Sprint 6
+
+**Proposed scope:** Activity Search & Smart Filters
+**Full spec:** `.ai/specs/2026-06-18-sprint6-10-roadmap.md` → Sprint 6 section
+
+### Pre-Sprint 6 decisions needed
+
+1. **Search backend:** PostgreSQL `ilike` (simple, no infra) vs OpenMercato search indexer (full-text, requires Meilisearch). Recommendation: start with `ilike` on `subject` + `notes`.
+2. **O365 write-back priority:** If Sprint 7 (write-back) is more urgent than Sprint 6 (search), swap them. Write-back requires conflict resolution policy decision before code starts.
+3. **CustomerInteraction migration timing:** Confirm Sprint 8 is the right timing — the longer it waits, the more the two models diverge.
+
+### What to load before starting Sprint 6
+
+| Task | Load |
+|---|---|
+| Add search to activities | `.ai/guides/search.md` |
+| Add quick-filter chips to widget | `src/modules/activities/widgets/injection/timeline/widget.client.tsx` |
+| Add search to list page | `src/modules/activities/backend/page.tsx` |
+
+### Closed decisions (Sprint 1–5 complete) — do not re-open
 
 | Decision | Answer | Where documented |
 |---|---|---|
