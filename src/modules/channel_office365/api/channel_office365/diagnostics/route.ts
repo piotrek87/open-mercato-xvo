@@ -172,6 +172,33 @@ export async function GET(request: Request): Promise<Response> {
     }
   })
 
+  // Step 6c: verify constraint names that email-thread-builder relies on
+  result.step6c_constraints = await safeQuery('constraints', async () => {
+    const rows = await conn.execute(
+      `SELECT conname, contype FROM pg_constraint
+       WHERE conname IN (
+         'external_conversations_channel_external_uq',
+         'message_channel_links_message_uq',
+         'customer_interactions_o365_dedup_idx'
+       )`,
+      [],
+    ) as Array<{ conname: string; contype: string }>
+    // Also check via pg_indexes for partial indexes (which are not in pg_constraint)
+    const idxRows = await conn.execute(
+      `SELECT indexname FROM pg_indexes
+       WHERE indexname IN (
+         'external_conversations_channel_external_uq',
+         'message_channel_links_message_uq',
+         'customer_interactions_o365_dedup_idx'
+       )`,
+      [],
+    ) as Array<{ indexname: string }>
+    return {
+      pgConstraints: rows.map(r => r.conname),
+      pgIndexes: idxRows.map(r => r.indexname),
+    }
+  })
+
   // Step 6b: test buildEmailCustomerMap with the channel's real org
   result.step6b_emailMapTest = await safeQuery('emailMapTest', async () => {
     const channelOrgId = '876c2f91-723e-4d80-8097-3a94fba69b5a'

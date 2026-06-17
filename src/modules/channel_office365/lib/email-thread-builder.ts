@@ -58,6 +58,7 @@ export async function buildEmailThreadRecords(
   const relevant = emails.filter(e => matchedPersonsByActivity.has(e.activityId))
   if (relevant.length === 0) return
 
+  let currentPhase = 'A'
   try {
     const now = new Date()
 
@@ -112,6 +113,7 @@ export async function buildEmailThreadRecords(
 
     // Map: O365 conversationKey → ExternalConversation UUID
     const ecIdByKey = new Map(ecRows.map(r => [r.external_conversation_id, r.id]))
+    currentPhase = 'B'
 
     // ─── Phase B: Messages (one per email) ───────────────────────────────────────────
     //
@@ -161,6 +163,7 @@ export async function buildEmailThreadRecords(
 
     // Map: O365 externalId → Message UUID
     const msgIdByExternalId = new Map(msgRows.map(r => [r.idempotency_key, r.id]))
+    currentPhase = 'C'
 
     // ─── Phase C: MessageChannelLinks (one per Message) ──────────────────────────────
     //
@@ -322,8 +325,8 @@ export async function buildEmailThreadRecords(
       ciParams,
     )
   } catch (err) {
-    console.warn(
-      '[channel_office365] buildEmailThreadRecords failed:',
+    console.error(
+      `[channel_office365] buildEmailThreadRecords failed at Phase ${(err as { _phase?: string })._phase ?? currentPhase}:`,
       err instanceof Error ? err.message : err,
     )
   }
