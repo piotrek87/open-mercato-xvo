@@ -75,9 +75,10 @@ export default function CompanyAddressesWidget({
 }: InjectionWidgetComponentProps<{ companyId?: string | null }, unknown>) {
   const detailMode = isDetailData(data)
 
+  const ctx = context as Record<string, unknown> | null | undefined
   const companyId = detailMode
-    ? (data as { company?: { id?: string } }).company?.id ?? context?.companyId ?? null
-    : context?.companyId ?? null
+    ? (data as { company?: { id?: string } }).company?.id ?? (ctx?.companyId as string | null | undefined) ?? null
+    : (ctx?.companyId as string | null | undefined) ?? (ctx?.resourceId as string | null | undefined) ?? (ctx?.recordId as string | null | undefined) ?? null
 
   const isCreateMode = !detailMode && !companyId
 

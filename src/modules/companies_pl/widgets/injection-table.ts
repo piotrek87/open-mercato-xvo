@@ -9,9 +9,9 @@ const injectionTable: ModuleInjectionTable = {
       priority: 50,
     },
   ],
-  // Company detail page (v2) — Addresses section on the left side (below ContactDetails)
-  // The detail page uses a bespoke layout (not CrudForm); spot ID from page.tsx line 970
-  'customers.company.detail:details': [
+  // Company detail page (v2) — Addresses section on the left side
+  // The detail CrudForm uses injectionSpotId="customers.company", resolvedInjectionSpotId = "customers.company"
+  'customers.company': [
     {
       widgetId: 'companies_pl.injection.company-addresses',
       kind: 'stack',
