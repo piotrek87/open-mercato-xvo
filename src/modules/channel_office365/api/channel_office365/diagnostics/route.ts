@@ -6,6 +6,7 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { z } from 'zod'
 import { findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { CustomerEntity } from '@open-mercato/core/modules/customers/data/entities'
+import { buildEmailCustomerMap } from '../../../lib/customer-linker'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['channel_office365.view'] },
@@ -143,15 +144,45 @@ export async function GET(request: Request): Promise<Response> {
     }
   })
 
-  // Step 6: Dedup index
-  result.step6_dedupIndex = await safeQuery('dedupIndex', async () => {
-    const rows = await conn.execute(
+  // Step 6: Dedup index + schema check
+  result.step6_schema = await safeQuery('schema', async () => {
+    const idxRows = await conn.execute(
       `SELECT indexname FROM pg_indexes
        WHERE tablename = 'customer_interactions'
          AND indexname = 'customer_interactions_o365_dedup_idx'`,
       [],
     ) as Array<{ indexname: string }>
-    return { exists: rows.length > 0 }
+
+    const colRows = await conn.execute(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_name = 'customer_interactions'
+         AND column_name IN ('external_message_id','channel_provider_key','source','interaction_type')
+       ORDER BY column_name`,
+      [],
+    ) as Array<{ column_name: string }>
+
+    // Test if we can actually run the CI insert with the correct org scope
+    const channelOrgId = '876c2f91-723e-4d80-8097-3a94fba69b5a'
+    const ciCount = await em.count(CustomerEntity, { tenantId, organizationId: channelOrgId, kind: 'person', deletedAt: null })
+
+    return {
+      dedupIndexExists: idxRows.length > 0,
+      ciColumns: colRows.map(r => r.column_name),
+      crmPersonsWithCorrectOrg: ciCount,
+    }
+  })
+
+  // Step 6b: test buildEmailCustomerMap with the channel's real org
+  result.step6b_emailMapTest = await safeQuery('emailMapTest', async () => {
+    const channelOrgId = '876c2f91-723e-4d80-8097-3a94fba69b5a'
+    const map = await buildEmailCustomerMap(em, { tenantId, organizationId: channelOrgId })
+    return {
+      emailMapSize: map.size,
+      sampleDomains: [...map.keys()].slice(0, 5).map(email => {
+        const at = email.indexOf('@')
+        return at > 0 ? `***@${email.slice(at + 1)}` : '***'
+      }),
+    }
   })
 
   // Step 7: Messages / MCL counts (raw with ? placeholders)
