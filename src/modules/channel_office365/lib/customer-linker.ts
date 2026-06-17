@@ -1,11 +1,15 @@
 /**
  * Auto-linking helpers: match activity participant emails against CRM CustomerEntity
- * primary emails and create ActivityLink records.
+ * primary emails and create ActivityLink records for persons AND their companies.
  *
  * CustomerEntity.primaryEmail is encrypted at rest with no hash field, so SQL
  * equality lookup is impossible. Strategy: decrypt all customer emails once per
  * sync run, build an in-memory Map<email, customerId[]>, then batch-insert links
  * via INSERT ... ON CONFLICT DO NOTHING (no prior SELECT needed per link).
+ *
+ * Company linking: after person links are inserted, a raw SQL lookup on
+ * customer_person_profiles retrieves the company_entity_id for each matched person.
+ * This ensures the activity also appears on the company timeline.
  */
 
 import { randomUUID } from 'crypto'
@@ -19,6 +23,18 @@ import { ActivityLink } from '../../activities/data/entities'
 const AUTO_LINK_CAP = 10
 
 type Scope = { tenantId: string; organizationId: string }
+
+type LinkRow = {
+  id: string
+  activityId: string
+  entityType: string
+  entityId: string
+  isPrimary: boolean
+  organizationId: string
+  tenantId: string
+  createdAt: Date
+  createdByUserId: null
+}
 
 export type ActivityLinkPair = {
   activityId: string
@@ -75,14 +91,15 @@ export async function buildEmailCustomerMap(
  * Batch-inserts ActivityLink rows for (activityId, participants) pairs where
  * participant emails match entries in emailMap.
  *
+ * Phase 1: Links for matched persons (customers:person).
+ * Phase 2: Links for companies of matched persons (customers:company) — resolved
+ *   via a single raw SQL lookup on customer_person_profiles.company_entity_id.
+ *
  * Uses em.upsertMany with onConflictAction: 'ignore' →
  *   INSERT ... ON CONFLICT DO NOTHING
- * so existing links (e.g. from a previous sync or manual creation) are silently
- * skipped without a prior SELECT. The UNIQUE constraint on (activity_id,
- * entity_type, entity_id) is the authoritative dedup guard.
+ * so existing links are silently skipped without a prior SELECT.
  *
- * Cap: up to AUTO_LINK_CAP (10) customer links per activity, consistent with
- * the Activities API soft limit.
+ * Cap: up to AUTO_LINK_CAP (10) person links per activity.
  */
 export async function autoLinkActivityToCustomers(
   em: EntityManager,
@@ -93,17 +110,7 @@ export async function autoLinkActivityToCustomers(
   if (emailMap.size === 0 || pairs.length === 0) return
 
   const now = new Date()
-  const linksToCreate: Array<{
-    id: string
-    activityId: string
-    entityType: string
-    entityId: string
-    isPrimary: boolean
-    organizationId: string
-    tenantId: string
-    createdAt: Date
-    createdByUserId: null
-  }> = []
+  const personLinks: LinkRow[] = []
 
   for (const { activityId, participants } of pairs) {
     if (!participants?.length) continue
@@ -122,7 +129,7 @@ export async function autoLinkActivityToCustomers(
         if (seen.has(customerId)) continue
         seen.add(customerId)
         count++
-        linksToCreate.push({
+        personLinks.push({
           id: randomUUID(),
           activityId,
           entityType: 'customers:person',
@@ -137,16 +144,69 @@ export async function autoLinkActivityToCustomers(
     }
   }
 
-  if (linksToCreate.length === 0) return
+  if (personLinks.length === 0) return
 
+  // Phase 1: insert person links
   try {
-    await em.upsertMany(ActivityLink, linksToCreate, {
+    await em.upsertMany(ActivityLink, personLinks, {
       onConflictAction: 'ignore',
       disableIdentityMap: true,
     })
   } catch (err) {
     console.warn(
-      '[channel_office365] autoLinkActivityToCustomers failed:',
+      '[channel_office365] autoLinkActivityToCustomers (persons) failed:',
+      err instanceof Error ? err.message : err,
+    )
+    return
+  }
+
+  // Phase 2: insert company links — one SQL lookup for all matched persons
+  try {
+    const personIds = [...new Set(personLinks.map(l => l.entityId))]
+
+    const rows = await em.getConnection().execute(
+      `SELECT customer_entity_id AS person_id, company_entity_id AS company_id
+       FROM customer_person_profiles
+       WHERE customer_entity_id = ANY($1)
+         AND company_entity_id IS NOT NULL`,
+      [personIds],
+    ) as Array<{ person_id: string; company_id: string }>
+
+    if (rows.length === 0) return
+
+    const personToCompany = new Map(rows.map(r => [r.person_id, r.company_id]))
+
+    const seenCompanyKeys = new Set<string>()
+    const companyLinks: LinkRow[] = []
+
+    for (const link of personLinks) {
+      const companyId = personToCompany.get(link.entityId)
+      if (!companyId) continue
+      const key = `${link.activityId}:${companyId}`
+      if (seenCompanyKeys.has(key)) continue
+      seenCompanyKeys.add(key)
+      companyLinks.push({
+        id: randomUUID(),
+        activityId: link.activityId,
+        entityType: 'customers:company',
+        entityId: companyId,
+        isPrimary: false,
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        createdAt: now,
+        createdByUserId: null,
+      })
+    }
+
+    if (companyLinks.length === 0) return
+
+    await em.upsertMany(ActivityLink, companyLinks, {
+      onConflictAction: 'ignore',
+      disableIdentityMap: true,
+    })
+  } catch (err) {
+    console.warn(
+      '[channel_office365] autoLinkActivityToCustomers (companies) failed:',
       err instanceof Error ? err.message : err,
     )
   }

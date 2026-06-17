@@ -16,14 +16,14 @@
  *   - P2-2: attachments not synced
  *   - P2-3: 7-day bootstrap window (enforced by graph-mail-client)
  *   - P2-4: Inbox + SentItems, two independent delta cursors
- *   - P2-5: no auto-link to CRM customers
+ *   - P2-5: auto-link to CRM customers by participant email (implemented in customer-linker)
  *
  * Activity mapping:
  *   activityType: 'email', lifecycleMode: 'fact', status: 'fact'
  *   externalProvider: 'office365_mail' (O365_EXTERNAL_PROVIDER_MAIL — NEVER changes)
  *   sourceType: 'inbox' | 'sent' to distinguish direction
  *   occurredAt: receivedDateTime (inbox) or sentDateTime (sent)
- *   visibility: 'private' — email is personal data
+ *   visibility: 'team' — synced email is shared CRM history, visible to all users with customer access
  */
 
 import type { EntityManager } from '@mikro-orm/postgresql'
@@ -353,7 +353,7 @@ function upsertMailActivity(
       metadata,
       ownerUserId: channel.userId ?? null,
       allDay: false,
-      visibility: 'private',
+      visibility: 'team',
       externalId: msg.id,
       externalProvider: O365_EXTERNAL_PROVIDER_MAIL,
       syncDirection: 'import',

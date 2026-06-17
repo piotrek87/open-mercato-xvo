@@ -305,7 +305,7 @@ async function syncChannel(
               participants: participants.length > 0 ? participants : null,
               metadata,
               ownerUserId: channel.userId ?? null,
-              visibility: 'private',
+              visibility: 'team',
               externalId: event.id,
               externalProvider: O365_EXTERNAL_PROVIDER_CALENDAR,
               syncDirection: 'import',
