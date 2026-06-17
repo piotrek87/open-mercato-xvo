@@ -24,7 +24,7 @@ RUN yarn install
 
 COPY . .
 RUN yarn generate
-RUN NODE_ENV=production yarn build
+RUN NODE_ENV=production NODE_OPTIONS="--max-old-space-size=4096" yarn build
 
 FROM node:24-alpine AS dev
 
