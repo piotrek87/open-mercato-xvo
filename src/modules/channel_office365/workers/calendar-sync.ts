@@ -101,7 +101,7 @@ export default async function handle(
   }
 }
 
-async function syncChannel(
+export async function syncChannel(
   channel: CommunicationChannel,
   em: EntityManager,
   credentialsService: CredentialsServiceLike,

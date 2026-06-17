@@ -108,7 +108,7 @@ export default async function handle(
   }
 }
 
-async function syncChannelMail(
+export async function syncChannelMail(
   channel: CommunicationChannel,
   em: EntityManager,
   credentialsService: CredentialsServiceLike,

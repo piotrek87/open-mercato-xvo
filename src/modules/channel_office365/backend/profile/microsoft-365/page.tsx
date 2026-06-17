@@ -132,12 +132,12 @@ export default function Office365Page() {
         body.syncFromDate = new Date(syncFromDate).toISOString()
         body.resetDelta = true
       }
-      const r = await apiCall('/api/channel_office365/channel_office365/sync', {
+      const r = await apiCall('/api/channel_office365/channel_office365/sync-now', {
         method: 'POST',
         body: JSON.stringify(body),
       })
       if (r.ok) {
-        flash(t('channel_office365.sync.success', 'Sync started — events will appear in a moment'), 'success')
+        flash(t('channel_office365.sync.success', 'Calendar synced — events will appear shortly'), 'success')
         if (syncFromDate) setCalendarSyncFrom('')
         setTimeout(() => void refetch(), 3000)
       } else {
@@ -158,12 +158,12 @@ export default function Office365Page() {
         body.syncFromDate = new Date(syncFromDate).toISOString()
         body.resetDelta = true
       }
-      const r = await apiCall('/api/channel_office365/channel_office365/mail-sync', {
+      const r = await apiCall('/api/channel_office365/channel_office365/mail-sync-now', {
         method: 'POST',
         body: JSON.stringify(body),
       })
       if (r.ok) {
-        flash(t('channel_office365.mailSync.success', 'Email sync started — emails will appear in a moment'), 'success')
+        flash(t('channel_office365.mailSync.success', 'Emails synced — they will appear shortly'), 'success')
         if (syncFromDate) setMailSyncFrom('')
         setTimeout(() => {
           void queryClient.invalidateQueries({ queryKey: ['channel_office365_state'] })
