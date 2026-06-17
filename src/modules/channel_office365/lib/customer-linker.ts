@@ -388,10 +388,9 @@ export async function autoLinkActivityToCustomers(
       'source', 'duration_minutes', 'location', 'all_day',
       'participants', 'channel_provider_key', 'pinned', 'created_at', 'updated_at',
     ] as const
-    const N = COLS.length
 
     const valueClauses = ciRows
-      .map((_, i) => '(' + COLS.map((_, j) => `$${i * N + j + 1}`).join(', ') + ')')
+      .map(() => '(' + COLS.map(() => '?').join(', ') + ')')
       .join(', ')
 
     const params: unknown[] = ciRows.flatMap(r => [
