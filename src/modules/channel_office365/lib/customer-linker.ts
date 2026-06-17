@@ -10,6 +10,11 @@
  * Company linking: after person links are inserted, a raw SQL lookup on
  * customer_person_profiles retrieves the company_entity_id for each matched person.
  * This ensures the activity also appears on the company timeline.
+ *
+ * Primary link: sets linkedEntityType/linkedEntityId on the Activity itself (the
+ * "primary" CRM association) so built-in CRM widgets that query only by primary link
+ * also show synced activities. Uses the first matched person per activity heuristic
+ * (sender for inbox, first recipient for sent) — only when no primary link is set yet.
  */
 
 import { randomUUID } from 'crypto'
@@ -92,6 +97,11 @@ export async function buildEmailCustomerMap(
  * participant emails match entries in emailMap.
  *
  * Phase 1: Links for matched persons (customers:person).
+ * Phase 1b: Sets linkedEntityType/linkedEntityId on the Activity itself (primary link)
+ *   so CRM widgets that query by primary link (not includeLinked) also show the activity.
+ *   Only applied where linked_entity_id IS NULL (never overwrites existing primary links).
+ *   Uses the first matched person per activity — ordering preserves participant list order
+ *   so sender (inbox) or first recipient (sent) takes precedence.
  * Phase 2: Links for companies of matched persons (customers:company) — resolved
  *   via a single raw SQL lookup on customer_person_profiles.company_entity_id.
  *
@@ -111,6 +121,8 @@ export async function autoLinkActivityToCustomers(
 
   const now = new Date()
   const personLinks: LinkRow[] = []
+  // First matched person per activity — used for primary link (Phase 1b)
+  const firstPersonByActivity = new Map<string, string>()
 
   for (const { activityId, participants } of pairs) {
     if (!participants?.length) continue
@@ -129,6 +141,9 @@ export async function autoLinkActivityToCustomers(
         if (seen.has(customerId)) continue
         seen.add(customerId)
         count++
+        if (!firstPersonByActivity.has(activityId)) {
+          firstPersonByActivity.set(activityId, customerId)
+        }
         personLinks.push({
           id: randomUUID(),
           activityId,
@@ -158,6 +173,31 @@ export async function autoLinkActivityToCustomers(
       err instanceof Error ? err.message : err,
     )
     return
+  }
+
+  // Phase 1b: set primary link on activities that don't have one yet.
+  // Builds a VALUES table and does a single batch UPDATE — no N+1.
+  try {
+    const pairs = [...firstPersonByActivity.entries()]
+    if (pairs.length > 0) {
+      const valuePlaceholders = pairs
+        .map((_, i) => `($${i * 2 + 1}::uuid, $${i * 2 + 2}::uuid)`)
+        .join(', ')
+      await em.getConnection().execute(
+        `UPDATE activities AS a
+         SET linked_entity_type = 'customers:person',
+             linked_entity_id    = d.person_id
+         FROM (VALUES ${valuePlaceholders}) AS d(activity_id, person_id)
+         WHERE a.id = d.activity_id
+           AND a.linked_entity_id IS NULL`,
+        pairs.flat(),
+      )
+    }
+  } catch (err) {
+    console.warn(
+      '[channel_office365] autoLinkActivityToCustomers (primary link update) failed:',
+      err instanceof Error ? err.message : err,
+    )
   }
 
   // Phase 2: insert company links — one SQL lookup for all matched persons
