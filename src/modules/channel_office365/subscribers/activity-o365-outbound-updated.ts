@@ -1,11 +1,11 @@
-import { type ActivityEventPayload, handleOutboundCreateOrUpdate } from './activity-o365-outbound'
+import { type InteractionEventPayload, handleOutboundCreateOrUpdate } from './activity-o365-outbound'
 
 export const metadata = {
-  event: 'activities.activity.updated',
+  event: 'customers.interaction.updated',
   persistent: true,
   id: 'channel_office365.activity-o365-outbound-updated',
 }
 
-export default async function handler(payload: ActivityEventPayload): Promise<void> {
+export default async function handler(payload: InteractionEventPayload): Promise<void> {
   await handleOutboundCreateOrUpdate(payload)
 }

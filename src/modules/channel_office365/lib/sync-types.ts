@@ -7,6 +7,7 @@
 export const SYNC_PROVIDER_O365 = 'office365'
 export const SYNC_TYPE_CALENDAR_EVENT = 'calendar_event'
 export const SYNC_ENTITY_ACTIVITY = 'activity'
+export const SYNC_ENTITY_CUSTOMER_INTERACTION = 'customer_interaction'
 
 export type SyncDirection = 'import' | 'export' | 'bidirectional'
 export type SyncFrom = 'om' | 'external'

@@ -1,11 +1,11 @@
-import { type ActivityEventPayload, handleOutboundDelete } from './activity-o365-outbound'
+import { type InteractionEventPayload, handleOutboundDelete } from './activity-o365-outbound'
 
 export const metadata = {
-  event: 'activities.activity.deleted',
+  event: 'customers.interaction.deleted',
   persistent: true,
   id: 'channel_office365.activity-o365-outbound-deleted',
 }
 
-export default async function handler(payload: ActivityEventPayload): Promise<void> {
+export default async function handler(payload: InteractionEventPayload): Promise<void> {
   await handleOutboundDelete(payload)
 }

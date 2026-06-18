@@ -1,53 +1,77 @@
 /**
  * Shared helpers for the O365 outbound sync subscribers.
  * Each event (created / updated / deleted) has its own subscriber file.
+ *
+ * Listens to customers.interaction.created/updated/deleted because meetings
+ * are created via POST /api/customers/interactions (core customers module),
+ * not via the activities module API.
  */
 
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
-import { Activity } from '../../activities/data/entities'
+import { CustomerInteraction } from '@open-mercato/core/modules/customers/data/entities'
 import {
   resolveUserChannel,
   resolveAccessToken,
-  pushMeetingToO365,
-  deleteMeetingFromO365,
+  pushInteractionToO365,
+  deleteInteractionFromO365,
 } from '../lib/sync-outbound'
 
-export const MEETING_ACTIVITY_TYPE = 'meeting'
+export const MEETING_INTERACTION_TYPE = 'meeting'
 
-export type ActivityEventPayload = {
+export type InteractionEventPayload = {
   id: string
   tenantId: string
   organizationId?: string | null
-  activityType?: string
-  ownerUserId?: string | null
-  syncDirection?: string | null
+  interactionType?: string | null
+  syncOrigin?: string | null
 }
 
 export async function handleOutboundCreateOrUpdate(
-  payload: ActivityEventPayload,
+  payload: InteractionEventPayload,
 ): Promise<void> {
-  const { id, tenantId, activityType, syncDirection } = payload
+  const { id, tenantId, interactionType, syncOrigin } = payload
 
-  if (!id || !tenantId) return
-  if (activityType !== MEETING_ACTIVITY_TYPE) return
-  if (syncDirection === 'import') return
+  console.info(`[channel_office365:outbound] received event id=${id} interactionType=${interactionType} tenantId=${tenantId} syncOrigin=${syncOrigin}`)
+
+  if (!id || !tenantId) {
+    console.info('[channel_office365:outbound] bail: missing id or tenantId')
+    return
+  }
+  if (interactionType !== MEETING_INTERACTION_TYPE) {
+    console.info(`[channel_office365:outbound] bail: interactionType=${interactionType} !== meeting`)
+    return
+  }
+  // Skip system-originated changes (e.g. email import) to prevent ping-pong
+  if (syncOrigin) {
+    console.info(`[channel_office365:outbound] bail: syncOrigin=${syncOrigin} set (system change)`)
+    return
+  }
 
   const container = await createRequestContainer()
   const em = (container.resolve('em') as EntityManager).fork()
 
-  const activity = await em.findOne(Activity, { id, tenantId, deletedAt: null })
-  if (!activity) return
-  if (activity.activityType !== MEETING_ACTIVITY_TYPE) return
-  if (activity.syncDirection === 'import') return
+  const interaction = await em.findOne(CustomerInteraction, { id, tenantId, deletedAt: null })
+  if (!interaction) {
+    console.info(`[channel_office365:outbound] bail: interaction ${id} not found`)
+    return
+  }
+  if (interaction.interactionType !== MEETING_INTERACTION_TYPE) {
+    console.info(`[channel_office365:outbound] bail: interaction.interactionType=${interaction.interactionType} !== meeting`)
+    return
+  }
 
-  // ownerUserId is optional (meeting type doesn't enforce it in UI);
-  // fall back to authorUserId (the logged-in user who created the activity)
-  const channelUserId = activity.ownerUserId ?? activity.authorUserId
-  if (!channelUserId) return
+  const channelUserId = interaction.ownerUserId ?? interaction.authorUserId
+  if (!channelUserId) {
+    console.info('[channel_office365:outbound] bail: no channelUserId (ownerUserId and authorUserId both null)')
+    return
+  }
 
   const channel = await resolveUserChannel(em, channelUserId, tenantId)
-  if (!channel) return
+  if (!channel) {
+    console.info(`[channel_office365:outbound] bail: no connected O365 channel for userId=${channelUserId} tenantId=${tenantId}`)
+    return
+  }
 
   let credentialsService: { resolve: (id: string, scope: object) => Promise<Record<string, unknown> | null> } | null = null
   try {
@@ -64,33 +88,43 @@ export async function handleOutboundCreateOrUpdate(
     return
   }
 
-  await pushMeetingToO365(activity, channel, accessToken, em)
+  console.info(`[channel_office365:outbound] pushing interaction ${interaction.id} to O365 for channel ${channel.id}`)
+  await pushInteractionToO365(interaction, channel, accessToken, em)
 }
 
 export async function handleOutboundDelete(
-  payload: ActivityEventPayload,
+  payload: InteractionEventPayload,
 ): Promise<void> {
-  const { id, tenantId, activityType, syncDirection } = payload
+  const { id, tenantId, interactionType, syncOrigin } = payload
+
+  console.info(`[channel_office365:outbound-delete] received event id=${id} interactionType=${interactionType}`)
 
   if (!id || !tenantId) return
-  if (activityType !== MEETING_ACTIVITY_TYPE) return
-  // If syncDirection='import' the delete originated from O365 — don't loop back
-  if (syncDirection === 'import') return
+  if (interactionType !== MEETING_INTERACTION_TYPE) return
+  if (syncOrigin) return
 
   const container = await createRequestContainer()
   const em = (container.resolve('em') as EntityManager).fork()
 
-  // Activity may already be soft-deleted — load without deletedAt filter
-  const activity = await em.findOne(Activity, { id, tenantId })
-  if (!activity) return
-  if (activity.activityType !== MEETING_ACTIVITY_TYPE) return
-  if (activity.syncDirection === 'import') return
+  // Interaction may already be soft-deleted — load without deletedAt filter
+  const interaction = await em.findOne(CustomerInteraction, { id, tenantId })
+  if (!interaction) {
+    console.info(`[channel_office365:outbound-delete] bail: interaction ${id} not found`)
+    return
+  }
+  if (interaction.interactionType !== MEETING_INTERACTION_TYPE) return
 
-  const channelUserId = activity.ownerUserId ?? activity.authorUserId
-  if (!channelUserId) return
+  const channelUserId = interaction.ownerUserId ?? interaction.authorUserId
+  if (!channelUserId) {
+    console.info('[channel_office365:outbound-delete] bail: no channelUserId')
+    return
+  }
 
   const channel = await resolveUserChannel(em, channelUserId, tenantId)
-  if (!channel) return
+  if (!channel) {
+    console.info(`[channel_office365:outbound-delete] bail: no connected O365 channel for userId=${channelUserId}`)
+    return
+  }
 
   let credentialsService: { resolve: (id: string, scope: object) => Promise<Record<string, unknown> | null> } | null = null
   try {
@@ -103,5 +137,6 @@ export async function handleOutboundDelete(
   const accessToken = await resolveAccessToken(channel, credentialsService)
   if (!accessToken) return
 
-  await deleteMeetingFromO365(activity, accessToken, em)
+  console.info(`[channel_office365:outbound-delete] deleting O365 event for interaction ${interaction.id}`)
+  await deleteInteractionFromO365(interaction, accessToken, em)
 }

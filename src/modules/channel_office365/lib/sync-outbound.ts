@@ -16,7 +16,7 @@
 
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { CommunicationChannel } from '@open-mercato/core/modules/communication_channels/data/entities'
-import { CustomerEntity } from '@open-mercato/core/modules/customers/data/entities'
+import { CustomerEntity, CustomerInteraction } from '@open-mercato/core/modules/customers/data/entities'
 import { findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { Activity, ActivityLink } from '../../activities/data/entities'
 import {
@@ -38,6 +38,7 @@ import {
   SYNC_PROVIDER_O365,
   SYNC_TYPE_CALENDAR_EVENT,
   SYNC_ENTITY_ACTIVITY,
+  SYNC_ENTITY_CUSTOMER_INTERACTION,
   type ConflictMeta,
 } from './sync-types'
 
@@ -329,5 +330,189 @@ export async function deleteMeetingFromO365(
 
   console.info(
     `[channel_office365:sync-outbound] Deleted O365 event ${o365Id} for activity ${activity.id}`,
+  )
+}
+
+/** Map a CustomerInteraction meeting to a Graph event payload. */
+function buildInteractionEventPayload(
+  interaction: CustomerInteraction,
+): GraphEventPayload {
+  const start = interaction.scheduledAt ?? interaction.occurredAt ?? new Date()
+  const durationMs = (interaction.durationMinutes ?? 60) * 60_000
+  const end = new Date(start.getTime() + durationMs)
+
+  const payload: GraphEventPayload = {
+    subject: interaction.title ?? '(no title)',
+    body: {
+      contentType: 'text',
+      content: interaction.body ?? '',
+    },
+    start: {
+      dateTime: start.toISOString().replace(/\.\d{3}Z$/, ''),
+      timeZone: 'UTC',
+    },
+    end: {
+      dateTime: end.toISOString().replace(/\.\d{3}Z$/, ''),
+      timeZone: 'UTC',
+    },
+  }
+
+  if (interaction.location) {
+    payload.location = { displayName: interaction.location }
+  }
+
+  const attendees = (interaction.participants ?? [])
+    .filter((p) => !!p.email)
+    .map((p) => ({ address: p.email!, name: p.name }))
+
+  if (attendees.length > 0) {
+    payload.attendees = attendees.map((a) => ({
+      emailAddress: { address: a.address, name: a.name },
+      type: 'required' as const,
+    }))
+  }
+
+  return payload
+}
+
+/**
+ * Push a CustomerInteraction meeting (create or update) to O365 Calendar.
+ * Uses the external_sync_registry for idempotent PATCH guarantee.
+ * Does NOT write back to the CustomerInteraction entity (no externalId column).
+ */
+export async function pushInteractionToO365(
+  interaction: CustomerInteraction,
+  channel: CommunicationChannel,
+  accessToken: string,
+  em: EntityManager,
+): Promise<void> {
+  const registry = new SyncRegistryService(em)
+  const payload = buildInteractionEventPayload(interaction)
+
+  const existing = await registry.findByEntityId(
+    SYNC_ENTITY_CUSTOMER_INTERACTION,
+    interaction.id,
+    SYNC_PROVIDER_O365,
+    SYNC_TYPE_CALENDAR_EVENT,
+  )
+
+  if (!existing) {
+    const created = await createCalendarEvent(accessToken, payload)
+    await registry.upsertSyncState({
+      entityType: SYNC_ENTITY_CUSTOMER_INTERACTION,
+      entityId: interaction.id,
+      provider: SYNC_PROVIDER_O365,
+      externalType: SYNC_TYPE_CALENDAR_EVENT,
+      externalId: created.id,
+      etag: created.changeKey,
+      syncDirection: 'bidirectional',
+      lastSyncedFrom: 'om',
+      channelId: channel.id,
+      tenantId: channel.tenantId,
+      organizationId: channel.organizationId ?? null,
+    })
+    console.info(
+      `[channel_office365:sync-outbound] Created O365 event ${created.id} for interaction ${interaction.id}`,
+    )
+    return
+  }
+
+  // UPDATE — registry row exists, enforce PATCH guarantee
+  let currentEtag: string | null = null
+  try {
+    currentEtag = await getCalendarEventChangeKey(accessToken, existing.externalId)
+  } catch (err) {
+    if (err instanceof GraphApiError && err.status === 404) {
+      console.warn(
+        `[channel_office365:sync-outbound] O365 event ${existing.externalId} not found, re-creating for interaction ${interaction.id}`,
+      )
+      const created = await createCalendarEvent(accessToken, payload)
+      await registry.upsertSyncState({
+        entityType: SYNC_ENTITY_CUSTOMER_INTERACTION,
+        entityId: interaction.id,
+        provider: SYNC_PROVIDER_O365,
+        externalType: SYNC_TYPE_CALENDAR_EVENT,
+        externalId: created.id,
+        etag: created.changeKey,
+        syncDirection: 'bidirectional',
+        lastSyncedFrom: 'om',
+        channelId: channel.id,
+        tenantId: channel.tenantId,
+        organizationId: channel.organizationId ?? null,
+      })
+      return
+    }
+    throw err
+  }
+
+  let conflictMeta: ConflictMeta | null = null
+  if (currentEtag) {
+    const conflictResult = detectConflict({
+      registryRow: existing,
+      trigger: 'outbound',
+      currentO365Etag: currentEtag,
+      omUpdatedAt: interaction.updatedAt,
+      omSubject: interaction.title ?? undefined,
+      omOccurredAt: interaction.scheduledAt ?? interaction.occurredAt ?? undefined,
+    })
+    if (conflictResult.isConflict) {
+      conflictMeta = conflictResult.meta
+    }
+  }
+
+  const updated = await updateCalendarEvent(accessToken, existing.externalId, payload)
+  await registry.upsertSyncState({
+    entityType: SYNC_ENTITY_CUSTOMER_INTERACTION,
+    entityId: interaction.id,
+    provider: SYNC_PROVIDER_O365,
+    externalType: SYNC_TYPE_CALENDAR_EVENT,
+    externalId: existing.externalId,
+    etag: updated.changeKey,
+    syncDirection: 'bidirectional',
+    lastSyncedFrom: 'om',
+    channelId: channel.id,
+    tenantId: channel.tenantId,
+    organizationId: channel.organizationId ?? null,
+    conflictMeta,
+  })
+  console.info(
+    `[channel_office365:sync-outbound] Updated O365 event ${existing.externalId} for interaction ${interaction.id}`,
+  )
+}
+
+/**
+ * Delete an O365 Calendar event when the corresponding OM interaction is deleted.
+ */
+export async function deleteInteractionFromO365(
+  interaction: CustomerInteraction,
+  accessToken: string,
+  em: EntityManager,
+): Promise<void> {
+  const registry = new SyncRegistryService(em)
+  const existing = await registry.findByEntityId(
+    SYNC_ENTITY_CUSTOMER_INTERACTION,
+    interaction.id,
+    SYNC_PROVIDER_O365,
+    SYNC_TYPE_CALENDAR_EVENT,
+  )
+  if (!existing) return
+
+  try {
+    await deleteCalendarEvent(accessToken, existing.externalId)
+  } catch (err) {
+    if (!(err instanceof GraphApiError && err.status === 404)) {
+      throw err
+    }
+  }
+
+  await registry.deleteByEntityId(
+    SYNC_ENTITY_CUSTOMER_INTERACTION,
+    interaction.id,
+    SYNC_PROVIDER_O365,
+    SYNC_TYPE_CALENDAR_EVENT,
+  )
+  await em.flush()
+  console.info(
+    `[channel_office365:sync-outbound] Deleted O365 event ${existing.externalId} for interaction ${interaction.id}`,
   )
 }
