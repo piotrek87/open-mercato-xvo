@@ -13,24 +13,7 @@ export const injectionTable: ModuleInjectionTable = {
       priority: 110,
     },
   ],
-  'detail:customers.person:tabs': [
-    {
-      widgetId: 'channel_office365.injection.meeting-manager',
-      priority: 100,
-      kind: 'tab' as const,
-      groupId: 'o365-meetings',
-      groupLabel: 'Meetings',
-    },
-  ],
-  'detail:customers.company:tabs': [
-    {
-      widgetId: 'channel_office365.injection.meeting-manager',
-      priority: 100,
-      kind: 'tab' as const,
-      groupId: 'o365-meetings',
-      groupLabel: 'Meetings',
-    },
-  ],
+
 }
 
 export default injectionTable
