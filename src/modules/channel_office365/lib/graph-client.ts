@@ -22,6 +22,8 @@ export interface GraphCalendarEvent {
   id: string
   subject: string
   bodyPreview?: string
+  /** Version identifier — used for conflict detection (Sprint 8A) */
+  changeKey?: string
   start: { dateTime: string; timeZone: string }
   end: { dateTime: string; timeZone: string }
   isAllDay?: boolean
@@ -44,6 +46,103 @@ export interface GraphCalendarEvent {
   onlineMeetingProvider?: string
   /** Deprecated by MS but reliable simple-string join URL — works on delta endpoint */
   onlineMeetingUrl?: string | null
+}
+
+export interface GraphEventPayload {
+  subject: string
+  body?: { contentType: 'text' | 'HTML'; content: string }
+  start: { dateTime: string; timeZone: string }
+  end: { dateTime: string; timeZone: string }
+  location?: { displayName: string }
+  attendees?: Array<{
+    emailAddress: { address: string; name?: string }
+    type: 'required' | 'optional'
+  }>
+  isOnlineMeeting?: boolean
+}
+
+export interface GraphEventResponse {
+  id: string
+  changeKey: string
+}
+
+async function graphMutate(
+  method: 'POST' | 'PATCH' | 'DELETE',
+  url: string,
+  accessToken: string,
+  body?: unknown,
+  sendUpdates?: 'all' | 'none' | 'modified',
+): Promise<unknown> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS)
+  const fullUrl = sendUpdates ? `${url}?$sendUpdates=${sendUpdates}` : url
+  try {
+    const res = await fetch(fullUrl, {
+      method,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    })
+    if (!res.ok) {
+      let detail = ''
+      try {
+        const errBody = (await res.json()) as { error?: { message?: string } }
+        detail = errBody?.error?.message ?? ''
+      } catch { /* ignore */ }
+      throw new GraphApiError(res.status, `Graph API ${res.status}: ${detail || res.statusText}`)
+    }
+    if (method === 'DELETE') return null
+    return await res.json()
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+/** POST /me/events — create a calendar event. Returns id + changeKey. */
+export async function createCalendarEvent(
+  accessToken: string,
+  payload: GraphEventPayload,
+): Promise<GraphEventResponse> {
+  const res = await graphMutate('POST', `${GRAPH_BASE}/me/events`, accessToken, payload, 'all')
+  return res as GraphEventResponse
+}
+
+/** PATCH /me/events/{id} — update existing event. Returns updated changeKey. */
+export async function updateCalendarEvent(
+  accessToken: string,
+  eventId: string,
+  payload: Partial<GraphEventPayload>,
+): Promise<GraphEventResponse> {
+  const res = await graphMutate('PATCH', `${GRAPH_BASE}/me/events/${eventId}`, accessToken, payload, 'none')
+  return res as GraphEventResponse
+}
+
+/** DELETE /me/events/{id} — delete event. Sends cancellation to attendees. */
+export async function deleteCalendarEvent(
+  accessToken: string,
+  eventId: string,
+): Promise<void> {
+  await graphMutate('DELETE', `${GRAPH_BASE}/me/events/${eventId}`, accessToken, undefined, 'all')
+}
+
+/** GET /me/events/{id}?$select=id,changeKey — fetch current changeKey for conflict check. */
+export async function getCalendarEventChangeKey(
+  accessToken: string,
+  eventId: string,
+): Promise<string | null> {
+  try {
+    const res = await graphFetch(
+      `${GRAPH_BASE}/me/events/${eventId}?$select=id,changeKey`,
+      accessToken,
+    ) as { changeKey?: string }
+    return res.changeKey ?? null
+  } catch (err) {
+    if (err instanceof GraphApiError && err.status === 404) return null
+    throw err
+  }
 }
 
 export interface CalendarDeltaPage {

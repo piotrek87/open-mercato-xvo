@@ -144,6 +144,23 @@
           "enumItems": [],
           "mappedType": "integer"
         },
+        "effective_date": {
+          "name": "effective_date",
+          "type": "timestamptz(6)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
         "external_id": {
           "name": "external_id",
           "type": "varchar(500)",
@@ -296,6 +313,23 @@
           "collation": null,
           "enumItems": [],
           "mappedType": "string"
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "json"
         },
         "notes": {
           "name": "notes",
@@ -551,40 +585,6 @@
           "collation": null,
           "enumItems": [],
           "mappedType": "string"
-        },
-        "effective_date": {
-          "name": "effective_date",
-          "type": "timestamptz(6)",
-          "unsigned": false,
-          "autoincrement": false,
-          "primary": false,
-          "nullable": true,
-          "unique": false,
-          "length": 6,
-          "precision": null,
-          "scale": null,
-          "default": null,
-          "comment": null,
-          "collation": null,
-          "enumItems": [],
-          "mappedType": "datetime"
-        },
-        "metadata": {
-          "name": "metadata",
-          "type": "jsonb",
-          "unsigned": false,
-          "autoincrement": false,
-          "primary": false,
-          "nullable": true,
-          "unique": false,
-          "length": null,
-          "precision": null,
-          "scale": null,
-          "default": null,
-          "comment": null,
-          "collation": null,
-          "enumItems": [],
-          "mappedType": "json"
         }
       },
       "indexes": [
@@ -664,19 +664,6 @@
           "composite": true,
           "constraint": false,
           "keyName": "activities_type_status_idx",
-          "primary": false,
-          "unique": false
-        },
-        {
-          "columnNames": [
-            "organization_id",
-            "tenant_id",
-            "effective_date",
-            "id"
-          ],
-          "composite": true,
-          "constraint": false,
-          "keyName": "activities_effective_date_idx",
           "primary": false,
           "unique": false
         }

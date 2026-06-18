@@ -6,7 +6,13 @@
  *   2. Refresh access token if expiring (delegates to adapter.refreshCredentials)
  *   3. Call Graph Calendar Delta API (drainCalendarDelta)
  *   4. UPSERT Activity records (meeting type) — batch load + withAtomicFlush (no N+1)
- *   5. Update channel.channelState.capabilities.calendar with new delta cursor
+ *   5. Write/update external_sync_registry rows (Sprint 8A)
+ *   6. Update channel.channelState.capabilities.calendar with new delta cursor
+ *
+ * Sprint 8A additions:
+ *   - Ping-pong prevention: events whose changeKey matches registry.etag AND
+ *     registry.lastSyncedFrom='om' are skipped (our own outbound write echoed back)
+ *   - registry rows written/updated after each inbound upsert
  *
  * channelState backward compat:
  *   Sprint 4A-4C stored deltaToken at top level (flat structure).
@@ -23,6 +29,7 @@ import type { JobContext, QueuedJob, WorkerMeta } from '@open-mercato/queue'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import { CommunicationChannel } from '@open-mercato/core/modules/communication_channels/data/entities'
 import { Activity } from '../../activities/data/entities'
+import { ExternalSyncRegistry } from '../data/entities'
 import { drainCalendarDelta, GraphApiError, type GraphCalendarEvent } from '../lib/graph-client'
 import { buildEmailCustomerMap, autoLinkActivityToCustomers } from '../lib/customer-linker'
 import {
@@ -34,6 +41,11 @@ import {
   O365_PROVIDER_KEY,
 } from '../lib/credentials'
 import { getO365CalendarAdapter } from '../lib/adapter'
+import {
+  SYNC_PROVIDER_O365,
+  SYNC_TYPE_CALENDAR_EVENT,
+  SYNC_ENTITY_ACTIVITY,
+} from '../lib/sync-types'
 
 export type CalendarSyncJobPayload = {
   channelId?: string
@@ -198,6 +210,7 @@ export async function syncChannel(
   }
 
   // Separate valid events from cancelled ones
+  const allExternalIds = events.filter((e) => e.type !== 'seriesMaster').map((e) => e.id)
   const validEvents = events.filter((e) => e.type !== 'seriesMaster' && !e.isCancelled)
   const cancelledExternalIds = events
     .filter((e) => e.type !== 'seriesMaster' && e.isCancelled)
@@ -214,6 +227,32 @@ export async function syncChannel(
       })
     : []
   const existingMap = new Map(existingActivities.map((a) => [a.externalId, a]))
+
+  // Sprint 8A: Batch-load registry rows for ping-pong detection
+  // An event is a ping-pong echo if changeKey == registry.etag AND lastSyncedFrom='om'
+  const existingRegistryRows = allExternalIds.length > 0
+    ? await em.find(ExternalSyncRegistry, {
+        provider: SYNC_PROVIDER_O365,
+        externalType: SYNC_TYPE_CALENDAR_EVENT,
+        externalId: { $in: allExternalIds },
+        tenantId: scope.tenantId,
+      })
+    : []
+  const registryByExternalId = new Map(existingRegistryRows.map((r) => [r.externalId, r]))
+
+  // Filter out ping-pong echoes: our own outbound writes reflected back via delta
+  const processableEvents = validEvents.filter((event) => {
+    if (!event.changeKey) return true
+    const reg = registryByExternalId.get(event.id)
+    if (!reg?.etag) return true
+    if (event.changeKey === reg.etag && reg.lastSyncedFrom === 'om') {
+      console.info(
+        `[channel_office365:calendar-sync] skipping ping-pong echo for event ${event.id} (changeKey=${event.changeKey})`,
+      )
+      return false
+    }
+    return true
+  })
 
   // Batch-load activities to soft-delete
   const toDelete = cancelledExternalIds.length > 0
@@ -232,11 +271,18 @@ export async function syncChannel(
     participants: Array<{ email: string; name?: string; status: string }>
   }> = []
 
+  // Collect registry entries to write after activity flush (IDs populated via RETURNING)
+  const pendingRegistryEntries: Array<{
+    entity: Activity
+    externalId: string
+    etag?: string | null
+  }> = []
+
   // Apply all mutations in a single transaction — no em.flush() inside
-  if (validEvents.length > 0 || toDelete.length > 0) {
+  if (processableEvents.length > 0 || toDelete.length > 0) {
     await withAtomicFlush(em, [
       () => {
-        for (const event of validEvents) {
+        for (const event of processableEvents) {
           const startDate = event.start?.dateTime ? new Date(event.start.dateTime) : null
           const endDate = event.end?.dateTime ? new Date(event.end.dateTime) : null
           const rawDuration =
@@ -290,6 +336,7 @@ export async function syncChannel(
             existing.lastSyncedAt = new Date()
             existing.updatedAt = new Date()
             pendingLinks.push({ entity: existing, participants })
+            pendingRegistryEntries.push({ entity: existing, externalId: event.id, etag: event.changeKey })
           } else {
             const newActivity = em.create(Activity, {
               tenantId: scope.tenantId,
@@ -317,6 +364,7 @@ export async function syncChannel(
             })
             em.persist(newActivity)
             pendingLinks.push({ entity: newActivity, participants })
+            pendingRegistryEntries.push({ entity: newActivity, externalId: event.id, etag: event.changeKey })
           }
         }
 
@@ -325,6 +373,48 @@ export async function syncChannel(
         }
       },
     ], { transaction: true, label: 'channel_office365.calendar-sync' })
+  }
+
+  // Sprint 8A: Write/update registry rows now that activity IDs are populated (via RETURNING).
+  // New activity UUIDs are server-generated — they're only available after the first flush.
+  if (pendingRegistryEntries.length > 0 || cancelledExternalIds.length > 0) {
+    await withAtomicFlush(em, [
+      () => {
+        const now = new Date()
+        for (const entry of pendingRegistryEntries) {
+          const existingReg = registryByExternalId.get(entry.externalId)
+          if (existingReg) {
+            if (entry.etag !== undefined) existingReg.etag = entry.etag ?? null
+            existingReg.lastSyncedAt = now
+            existingReg.lastSyncedFrom = 'external'
+            existingReg.updatedAt = now
+          } else {
+            const reg = em.create(ExternalSyncRegistry, {
+              entityType: SYNC_ENTITY_ACTIVITY,
+              entityId: entry.entity.id,
+              provider: SYNC_PROVIDER_O365,
+              externalType: SYNC_TYPE_CALENDAR_EVENT,
+              externalId: entry.externalId,
+              etag: entry.etag ?? null,
+              syncDirection: 'bidirectional',
+              lastSyncedAt: now,
+              lastSyncedFrom: 'external',
+              channelId: channel.id,
+              tenantId: scope.tenantId,
+              organizationId: scope.organizationId,
+              createdAt: now,
+              updatedAt: now,
+            })
+            em.persist(reg)
+          }
+        }
+        for (const reg of existingRegistryRows) {
+          if (cancelledExternalIds.includes(reg.externalId)) {
+            em.remove(reg)
+          }
+        }
+      },
+    ], { transaction: true, label: 'channel_office365.calendar-sync.registry' })
   }
 
   // Auto-link synced activities to CRM customers by matching participant emails.
