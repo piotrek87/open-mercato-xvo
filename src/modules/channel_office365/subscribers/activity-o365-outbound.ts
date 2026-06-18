@@ -27,9 +27,9 @@ export type ActivityEventPayload = {
 export async function handleOutboundCreateOrUpdate(
   payload: ActivityEventPayload,
 ): Promise<void> {
-  const { id, tenantId, ownerUserId, activityType, syncDirection } = payload
+  const { id, tenantId, activityType, syncDirection } = payload
 
-  if (!id || !tenantId || !ownerUserId) return
+  if (!id || !tenantId) return
   if (activityType !== MEETING_ACTIVITY_TYPE) return
   if (syncDirection === 'import') return
 
@@ -40,6 +40,9 @@ export async function handleOutboundCreateOrUpdate(
   if (!activity) return
   if (activity.activityType !== MEETING_ACTIVITY_TYPE) return
   if (activity.syncDirection === 'import') return
+
+  const ownerUserId = activity.ownerUserId
+  if (!ownerUserId) return
 
   const channel = await resolveUserChannel(em, ownerUserId, tenantId)
   if (!channel) return
@@ -65,7 +68,7 @@ export async function handleOutboundCreateOrUpdate(
 export async function handleOutboundDelete(
   payload: ActivityEventPayload,
 ): Promise<void> {
-  const { id, tenantId, ownerUserId, activityType, syncDirection } = payload
+  const { id, tenantId, activityType, syncDirection } = payload
 
   if (!id || !tenantId) return
   if (activityType !== MEETING_ACTIVITY_TYPE) return
@@ -81,7 +84,7 @@ export async function handleOutboundDelete(
   if (activity.activityType !== MEETING_ACTIVITY_TYPE) return
   if (activity.syncDirection === 'import') return
 
-  const userId = ownerUserId ?? activity.ownerUserId
+  const userId = activity.ownerUserId
   if (!userId) return
 
   const channel = await resolveUserChannel(em, userId, tenantId)
