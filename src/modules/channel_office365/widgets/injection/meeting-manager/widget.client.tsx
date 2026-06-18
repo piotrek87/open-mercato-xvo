@@ -5,7 +5,8 @@ import type { InjectionWidgetComponentProps } from '@open-mercato/shared/modules
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { Button } from '@open-mercato/ui/primitives/button'
-import { Calendar, Trash2 } from 'lucide-react'
+import { Trash2, Calendar } from 'lucide-react'
+import { EmptyState } from '@open-mercato/ui/backend/EmptyState'
 
 type MeetingRow = {
   id: string
@@ -13,6 +14,7 @@ type MeetingRow = {
   scheduledAt: string | null
   occurredAt: string | null
   durationMinutes: number | null
+  status: string | null
 }
 
 type ListResponse = {
@@ -62,7 +64,7 @@ export default function MeetingManagerWidget({
     setError(null)
     try {
       const r = await apiCall<ListResponse>(
-        `/api/customers/interactions?entityId=${encodeURIComponent(entityId)}&interactionType=meeting&limit=25&sortField=scheduledAt&sortDir=desc`,
+        `/api/customers/interactions?entityId=${encodeURIComponent(entityId)}&interactionType=meeting&limit=50&sortField=scheduledAt&sortDir=desc`,
       )
       if (r.ok && r.result) {
         setMeetings(r.result.items ?? [])
@@ -83,6 +85,7 @@ export default function MeetingManagerWidget({
   const handleDelete = React.useCallback(
     async (id: string) => {
       setDeleting(id)
+      setError(null)
       try {
         const r = await apiCall('/api/customers/interactions', {
           method: 'DELETE',
@@ -103,45 +106,62 @@ export default function MeetingManagerWidget({
   )
 
   if (!entityId) return null
-  if (loading) return null
-  if (meetings.length === 0) return null
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
+        {t('channel_office365.meetings.loading', 'Loading meetings…')}
+      </div>
+    )
+  }
+
+  if (error) {
+    return <p className="py-4 text-sm text-status-error-text">{error}</p>
+  }
+
+  if (meetings.length === 0) {
+    return (
+      <EmptyState
+        title={t('channel_office365.meetings.empty.title', 'No meetings yet')}
+        description={t(
+          'channel_office365.meetings.empty.description',
+          'Meetings scheduled from this record will appear here and sync to Microsoft 365.',
+        )}
+        icon={<Calendar className="size-6" />}
+      />
+    )
+  }
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2 text-sm font-semibold">
-        <Calendar className="size-4 text-muted-foreground" />
-        <span>{t('channel_office365.meetings.sectionTitle', 'Microsoft 365 Meetings')}</span>
-      </div>
-      {error ? (
-        <p className="text-xs text-status-error-text">{error}</p>
-      ) : null}
-      <ul className="space-y-1">
-        {meetings.map((m) => (
-          <li
-            key={m.id}
-            className="flex items-center justify-between gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm"
+    <div className="space-y-1">
+      {meetings.map((m) => (
+        <div
+          key={m.id}
+          className="flex items-center gap-3 rounded-md border border-border bg-card px-4 py-3"
+        >
+          <Calendar className="size-4 shrink-0 text-muted-foreground" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium">
+              {m.title ?? t('channel_office365.meetings.untitled', '(no title)')}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {formatDateTime(m.scheduledAt ?? m.occurredAt)}
+              {m.durationMinutes ? ` · ${m.durationMinutes} min` : ''}
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={t('channel_office365.meetings.deleteAriaLabel', 'Delete meeting')}
+            disabled={deleting === m.id}
+            onClick={() => void handleDelete(m.id)}
+            className="shrink-0 text-muted-foreground hover:text-status-error-text"
           >
-            <div className="min-w-0 flex-1">
-              <p className="truncate font-medium">{m.title ?? t('channel_office365.meetings.untitled', '(no title)')}</p>
-              <p className="text-xs text-muted-foreground">
-                {formatDateTime(m.scheduledAt ?? m.occurredAt)}
-                {m.durationMinutes ? ` · ${m.durationMinutes} min` : ''}
-              </p>
-            </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label={t('channel_office365.meetings.delete', 'Delete meeting')}
-              disabled={deleting === m.id}
-              onClick={() => void handleDelete(m.id)}
-              className="shrink-0 text-muted-foreground hover:text-status-error-text"
-            >
-              <Trash2 className="size-4" />
-            </Button>
-          </li>
-        ))}
-      </ul>
+            <Trash2 className="size-4" />
+          </Button>
+        </div>
+      ))}
     </div>
   )
 }
