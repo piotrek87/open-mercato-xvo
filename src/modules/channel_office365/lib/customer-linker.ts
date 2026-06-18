@@ -398,38 +398,6 @@ export async function autoLinkActivityToCustomers(
       })
     }
 
-    // Also create CIs for companies associated with matched persons (meetings only)
-    const seenCompanyCiKeys = new Set<string>()
-    for (const link of personLinks) {
-      const pair = pairByActivityId.get(link.activityId)
-      if (!pair?.externalId || !pair.interactionType || pair.interactionType === 'email') continue
-      const companyId = personToCompany.get(link.entityId)
-      if (!companyId) continue
-      const source = `office365:calendar:${pair.externalId}`
-      const ciKey = `${companyId}:${source}`
-      if (seenCompanyCiKeys.has(ciKey)) continue
-      seenCompanyCiKeys.add(ciKey)
-      const eventTime = pair.occurredAt ?? pair.dueAt ?? null
-      const status = (eventTime && eventTime <= now) ? 'done' : 'planned'
-      ciRows.push({
-        id: randomUUID(),
-        entityId: companyId,
-        interactionType: pair.interactionType,
-        title: pair.subject ?? null,
-        body: pair.notes ?? null,
-        occurredAt: eventTime,
-        ownerUserId: pair.ownerUserId ?? null,
-        visibility: 'team',
-        status,
-        source,
-        durationMinutes: pair.durationMinutes ?? null,
-        location: pair.location ?? null,
-        allDay: pair.allDay ?? false,
-        participants: pair.participants != null ? JSON.stringify(pair.participants) : null,
-        channelProviderKey: null,
-      })
-    }
-
     if (ciRows.length === 0) return { persons: personsByActivity, companies: companiesByActivity }
 
     // Batch INSERT with ON CONFLICT DO UPDATE — refreshes title/body/time on re-sync.

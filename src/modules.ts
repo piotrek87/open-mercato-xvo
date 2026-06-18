@@ -117,7 +117,30 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'customer_accounts', from: '@open-mercato/core' },
   { id: 'portal', from: '@open-mercato/core' },
   { id: 'activities', from: '@app' },
-  { id: 'channel_office365', from: '@app' },
+  {
+    id: 'channel_office365',
+    from: '@app',
+    overrides: {
+      routes: {
+        api: {
+          'GET /api/customers/interactions': {
+            handler: async (req: Request) => {
+              const { GET } = await import('./modules/channel_office365/lib/interactions-get-override')
+              return GET(req)
+            },
+            metadata: { requireAuth: true, requireFeatures: ['customers.interactions.view'] },
+          },
+          'GET /api/customers/interactions/counts': {
+            handler: async (req: Request) => {
+              const { getInteractionCounts } = await import('./modules/channel_office365/lib/interactions-get-override')
+              return getInteractionCounts(req)
+            },
+            metadata: { requireAuth: true, requireFeatures: ['customers.interactions.view'] },
+          },
+        },
+      },
+    },
+  },
   { id: 'companies_pl', from: '@app' },
   {
     id: 'example',

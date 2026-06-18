@@ -271,7 +271,7 @@ export async function syncChannelMail(
   if (pendingLinks.length > 0) {
     const emailMap = await buildEmailCustomerMap(em, scope)
     if (emailMap.size > 0) {
-      const { persons: matchedPersonsByActivity, companies: matchedCompaniesByActivity } =
+      const { persons: matchedPersonsByActivity } =
         await autoLinkActivityToCustomers(
           em,
           pendingLinks.map(({ entity, participants }) => ({
@@ -304,7 +304,7 @@ export async function syncChannelMail(
           ownerUserId: entity.ownerUserId ?? null,
           participants,
         }))
-        await buildEmailThreadRecords(em, emailEntries, matchedPersonsByActivity, channel.id, scope, matchedCompaniesByActivity)
+        await buildEmailThreadRecords(em, emailEntries, matchedPersonsByActivity, channel.id, scope)
       }
     }
   }
