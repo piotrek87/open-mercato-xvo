@@ -7,7 +7,7 @@ import { Alert } from '@open-mercato/ui/primitives/alert'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { Calendar, Mail, CheckCircle, AlertCircle, RefreshCw, ExternalLink, Info } from 'lucide-react'
+import { Calendar, Mail, CheckCircle, AlertCircle, RefreshCw, ExternalLink, Info, Trash2 } from 'lucide-react'
 import { O365_MAIL_READ_SCOPE, O365_PROVIDER_KEY } from '../../../lib/credentials'
 
 type ChannelRow = {
@@ -46,6 +46,7 @@ export default function Office365Page() {
   const [togglingId, setTogglingId] = React.useState<string | null>(null)
   const [calendarSyncFrom, setCalendarSyncFrom] = React.useState('')
   const [mailSyncFrom, setMailSyncFrom] = React.useState('')
+  const [resettingId, setResettingId] = React.useState<string | null>(null)
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['channel_office365_channels'],
@@ -175,6 +176,31 @@ export default function Office365Page() {
       flash(t('channel_office365.mailSync.error', 'Failed to start email sync'), 'error')
     } finally {
       setMailSyncingId(null)
+    }
+  }
+
+  async function handleResetSyncData(channelId: string) {
+    if (!confirm(t(
+      'channel_office365.resetData.confirm',
+      'Wyczyścić wszystkie dane synchronizacji M365? Usunie aktywności, e-maile i spotkania pobrane z Office 365. Rekordy CRM (osoby, firmy, szanse) nie zostaną usunięte.',
+    ))) return
+    setResettingId(channelId)
+    try {
+      const r = await apiCall('/api/channel_office365/channel_office365/reset-data', {
+        method: 'POST',
+        body: JSON.stringify({ channelId }),
+      })
+      if (r.ok) {
+        flash(t('channel_office365.resetData.success', 'Dane synchronizacji wyczyszczone — możesz teraz uruchomić sync od nowa'), 'success')
+        void queryClient.invalidateQueries({ queryKey: ['channel_office365_state'] })
+        setTimeout(() => void refetch(), 1000)
+      } else {
+        flash(t('channel_office365.resetData.error', 'Nie udało się wyczyścić danych synchronizacji'), 'error')
+      }
+    } catch {
+      flash(t('channel_office365.resetData.error', 'Nie udało się wyczyścić danych synchronizacji'), 'error')
+    } finally {
+      setResettingId(null)
     }
   }
 
@@ -434,6 +460,30 @@ export default function Office365Page() {
                           </Button>
                         </div>
                       )}
+                    </div>
+
+                    {/* Reset sync data — destroys O365-synced calendar/mail data, not CRM records */}
+                    <div className="flex items-center justify-between rounded-md border border-status-error-border/40 bg-status-error-bg/30 px-3 py-2">
+                      <div>
+                        <p className="text-xs font-medium text-status-error-text">
+                          {t('channel_office365.resetData.label', 'Wyczyść dane sync')}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {t('channel_office365.resetData.hint', 'Usuwa aktywności, e-maile i spotkania z M365. Nie usuwa osób, firm ani szans.')}
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => void handleResetSyncData(channel.id)}
+                        disabled={resettingId === channel.id}
+                        aria-label={t('channel_office365.resetData.label', 'Wyczyść dane sync')}
+                      >
+                        <Trash2 className="size-3.5 mr-1" />
+                        {resettingId === channel.id
+                          ? t('channel_office365.resetData.clearing', 'Czyszczenie…')
+                          : t('channel_office365.resetData.label', 'Wyczyść dane sync')}
+                      </Button>
                     </div>
 
                     {/* Mail scope hint — shown when Mail.ReadWrite not yet granted */}
