@@ -13,6 +13,18 @@ export const injectionTable: ModuleInjectionTable = {
       priority: 110,
     },
   ],
+  'detail:customers.person:footer': [
+    {
+      widgetId: 'channel_office365.injection.meeting-manager',
+      priority: 100,
+    },
+  ],
+  'detail:customers.company:footer': [
+    {
+      widgetId: 'channel_office365.injection.meeting-manager',
+      priority: 100,
+    },
+  ],
 }
 
 export default injectionTable
