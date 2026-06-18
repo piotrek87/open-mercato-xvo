@@ -41,10 +41,12 @@ export async function handleOutboundCreateOrUpdate(
   if (activity.activityType !== MEETING_ACTIVITY_TYPE) return
   if (activity.syncDirection === 'import') return
 
-  const ownerUserId = activity.ownerUserId
-  if (!ownerUserId) return
+  // ownerUserId is optional (meeting type doesn't enforce it in UI);
+  // fall back to authorUserId (the logged-in user who created the activity)
+  const channelUserId = activity.ownerUserId ?? activity.authorUserId
+  if (!channelUserId) return
 
-  const channel = await resolveUserChannel(em, ownerUserId, tenantId)
+  const channel = await resolveUserChannel(em, channelUserId, tenantId)
   if (!channel) return
 
   let credentialsService: { resolve: (id: string, scope: object) => Promise<Record<string, unknown> | null> } | null = null
@@ -84,10 +86,10 @@ export async function handleOutboundDelete(
   if (activity.activityType !== MEETING_ACTIVITY_TYPE) return
   if (activity.syncDirection === 'import') return
 
-  const userId = activity.ownerUserId
-  if (!userId) return
+  const channelUserId = activity.ownerUserId ?? activity.authorUserId
+  if (!channelUserId) return
 
-  const channel = await resolveUserChannel(em, userId, tenantId)
+  const channel = await resolveUserChannel(em, channelUserId, tenantId)
   if (!channel) return
 
   let credentialsService: { resolve: (id: string, scope: object) => Promise<Record<string, unknown> | null> } | null = null
