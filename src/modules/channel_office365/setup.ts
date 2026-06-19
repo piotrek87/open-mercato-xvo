@@ -72,8 +72,8 @@ async function ensureCalendarSyncSchedule(
 
 export const setup: ModuleSetupConfig = {
   defaultRoleFeatures: {
-    superadmin: ['channel_office365.view', 'channel_office365.configure'],
-    admin: ['channel_office365.view', 'channel_office365.configure'],
+    superadmin: ['channel_office365.view', 'channel_office365.configure', 'channel_office365.manage'],
+    admin: ['channel_office365.view', 'channel_office365.configure', 'channel_office365.manage'],
   },
   async onTenantCreated() {
     ensureO365AdapterRegistered()

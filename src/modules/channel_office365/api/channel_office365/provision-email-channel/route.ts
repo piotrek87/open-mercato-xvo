@@ -34,11 +34,20 @@ export async function POST(request: Request): Promise<Response> {
     organizationId: (auth.organizationId as string | null | undefined) ?? null,
   }
 
-  const result = await provisionEmailChannel({
-    em,
-    userId: auth.sub as string,
-    scope,
-  })
+  let result
+  try {
+    result = await provisionEmailChannel({
+      em,
+      userId: auth.sub as string,
+      scope,
+    })
+  } catch (err) {
+    console.error('[channel_office365] provision-email-channel error:', err instanceof Error ? err.message : err)
+    return NextResponse.json(
+      { error: 'provision_failed', message: 'Failed to provision email channel' },
+      { status: 500 },
+    )
+  }
 
   if (!result) {
     return NextResponse.json(

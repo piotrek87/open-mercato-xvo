@@ -11,6 +11,12 @@ export const features = [
     module: 'channel_office365',
     dependsOn: ['channel_office365.view'],
   },
+  {
+    id: 'channel_office365.manage',
+    title: 'Manage Office 365 email channel settings (attachments, sync)',
+    module: 'channel_office365',
+    dependsOn: ['channel_office365.view'],
+  },
 ]
 
 export default features
