@@ -165,6 +165,12 @@ export default function Office365Page() {
     try {
       const r = await apiCall(`/api/communication_channels/channels/${channelId}`, { method: 'DELETE' })
       if (r.ok) {
+        // Cascade: deactivate sibling email channel (office365_mail) if provisioned
+        if (emailChannel) {
+          await apiCall(`/api/communication_channels/channels/${emailChannel.id}`, { method: 'DELETE' }).catch(() => {
+            // Non-fatal — email channel may already be gone or hub handles it
+          })
+        }
         flash(t('channel_office365.disconnect.success', 'Microsoft 365 disconnected'), 'success')
         void refetch()
       } else {
