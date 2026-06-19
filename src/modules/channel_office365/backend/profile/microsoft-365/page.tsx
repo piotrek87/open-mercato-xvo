@@ -47,6 +47,7 @@ export default function Office365Page() {
   const [syncingId, setSyncingId] = React.useState<string | null>(null)
   const [mailSyncingId, setMailSyncingId] = React.useState<string | null>(null)
   const [togglingId, setTogglingId] = React.useState<string | null>(null)
+  const [togglingAttachments, setTogglingAttachments] = React.useState(false)
   const [calendarSyncFrom, setCalendarSyncFrom] = React.useState('')
   const [resettingId, setResettingId] = React.useState<string | null>(null)
 
@@ -96,9 +97,21 @@ export default function Office365Page() {
     refetchInterval: 30_000,
   })
 
+  const { data: emailSettingsData, refetch: refetchEmailSettings } = useQuery({
+    queryKey: ['channel_office365_email_settings'],
+    queryFn: async () => {
+      const r = await apiCall<{ settings: { syncAttachments: boolean; maxAttachmentSizeMb: number } | null }>(
+        '/api/channel_office365/channel_office365/email-settings',
+      )
+      return r.result?.settings ?? null
+    },
+    refetchInterval: 60_000,
+  })
+
   const channels = (data?.items ?? []).filter((c) => c.providerKey === O365_PROVIDER_KEY)
   // Email channel (hub-managed, office365_mail) — at most 1 per user
   const emailChannel = (data?.items ?? []).find((c) => c.providerKey === O365_MAIL_PROVIDER_KEY) ?? null
+  const syncAttachments = emailSettingsData?.syncAttachments === true
 
   const stateById = React.useMemo(() => {
     const map = new Map<string, ChannelStateRow>()
@@ -204,6 +217,33 @@ export default function Office365Page() {
       flash(t('channel_office365.mailSync.error', 'Failed to start email sync'), 'error')
     } finally {
       setMailSyncingId(null)
+    }
+  }
+
+  async function handleToggleAttachments(enable: boolean) {
+    setTogglingAttachments(true)
+    try {
+      const r = await apiCall('/api/channel_office365/channel_office365/email-settings', {
+        method: 'PATCH',
+        body: JSON.stringify({ syncAttachments: enable }),
+      })
+      if (r.ok) {
+        flash(
+          enable
+            ? t('channel_office365.attachments.enabled', 'Synchronizacja załączników włączona')
+            : t('channel_office365.attachments.disabled', 'Synchronizacja załączników wyłączona'),
+          'success',
+        )
+        void refetchEmailSettings()
+      } else if (r.status === 404) {
+        flash(t('channel_office365.mailSync.noChannel', 'Email channel not provisioned — reconnect Microsoft 365'), 'error')
+      } else {
+        flash(t('channel_office365.attachments.error', 'Nie udało się zmienić ustawień'), 'error')
+      }
+    } catch {
+      flash(t('channel_office365.attachments.error', 'Nie udało się zmienić ustawień'), 'error')
+    } finally {
+      setTogglingAttachments(false)
     }
   }
 
@@ -410,6 +450,30 @@ export default function Office365Page() {
                       </div>
                     </div>
 
+                    {/* Attachments disabled alert — shown when email sync is on but attachments off */}
+                    {mailEnabled && !syncAttachments && (
+                      <Alert variant="default" className="py-2">
+                        <Info className="size-4 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium">
+                            {t('channel_office365.attachments.disabled.title', 'Synchronizacja załączników jest wyłączona')}
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {t('channel_office365.attachments.disabled.description', 'Załączniki z emaili nie są kopiowane do Open Mercato.')}
+                            {' '}
+                            <button
+                              type="button"
+                              className="underline underline-offset-2 hover:text-foreground transition-colors"
+                              onClick={() => void handleToggleAttachments(true)}
+                              disabled={togglingAttachments}
+                            >
+                              {t('channel_office365.attachments.disabled.cta', 'Włącz synchronizację załączników →')}
+                            </button>
+                          </p>
+                        </div>
+                      </Alert>
+                    )}
+
                     {/* Email sync capability row */}
                     <div className="rounded-md bg-muted/30 px-3 py-2 space-y-2">
                       <div className="flex items-center justify-between">
@@ -466,6 +530,45 @@ export default function Office365Page() {
                         </div>
                       </div>
                     </div>
+
+                    {/* Attachments toggle — only shown when email sync is enabled */}
+                    {mailEnabled && (
+                      <div className="rounded-md bg-muted/30 px-3 py-2 space-y-1">
+                        <div className="flex items-center justify-between gap-4">
+                          <div>
+                            <p className="text-xs font-medium">
+                              {t('channel_office365.attachments.label', 'Synchronizacja załączników')}
+                              {syncAttachments && (
+                                <span className="ml-2 inline-flex items-center rounded-full bg-status-success-bg px-1.5 py-0.5 text-[10px] font-medium text-status-success-text">
+                                  {t('channel_office365.attachments.active', 'aktywna')}
+                                </span>
+                              )}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {t(
+                                'channel_office365.attachments.description',
+                                'Kiedy włączona, załączniki z emaili będą kopiowane do Open Mercato i zajmować miejsce na dysku. Domyślny limit: 10 MB na plik.',
+                              )}
+                            </p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={syncAttachments ? 'outline' : 'default'}
+                            onClick={() => void handleToggleAttachments(!syncAttachments)}
+                            disabled={togglingAttachments}
+                            aria-label={syncAttachments
+                              ? t('channel_office365.attachments.disable', 'Wyłącz synchronizację załączników')
+                              : t('channel_office365.attachments.enable', 'Włącz synchronizację załączników')}
+                          >
+                            {togglingAttachments
+                              ? t('channel_office365.attachments.updating', 'Aktualizacja…')
+                              : syncAttachments
+                                ? t('channel_office365.attachments.disable', 'Wyłącz')
+                                : t('channel_office365.attachments.enable', 'Włącz')}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Reset sync data — destroys O365-synced calendar/mail data, not CRM records */}
                     <div className="flex items-center justify-between rounded-md border border-status-error-border/40 bg-status-error-bg/30 px-3 py-2">

@@ -1,10 +1,29 @@
 import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
+import type { EntityManager } from '@mikro-orm/postgresql'
 import {
   hasChannelAdapter,
   registerChannelAdapter,
 } from '@open-mercato/core/modules/communication_channels/lib/adapter-registry-singleton'
+import { AttachmentPartition } from '@open-mercato/core/modules/attachments/data/entities'
 import { getO365CalendarAdapter } from './lib/adapter'
 import { O365_PROVIDER_KEY } from './lib/credentials'
+
+const EMAIL_ATTACHMENTS_PARTITION = 'email_attachments'
+
+async function ensureEmailAttachmentsPartition(em: EntityManager): Promise<void> {
+  const existing = await em.findOne(AttachmentPartition, { code: EMAIL_ATTACHMENTS_PARTITION })
+  if (existing) return
+  const partition = em.create(AttachmentPartition, {
+    code: EMAIL_ATTACHMENTS_PARTITION,
+    title: 'Email Attachments',
+    description: 'Attachments downloaded from Microsoft 365 emails.',
+    storageDriver: 'local',
+    isPublic: false,
+    requiresOcr: false,
+  })
+  em.persist(partition)
+  await em.flush()
+}
 
 // Stable UUIDs for scheduler upserts — must be valid UUIDs (ScheduledJob.id is uuid type)
 const CALENDAR_SYNC_SCHEDULE_ID = '3b8f7e4a-2c1d-4e5f-8a9b-0c1d2e3f4a5b'
@@ -51,7 +70,6 @@ async function ensureCalendarSyncSchedule(
   }
 }
 
-// Mail sync scheduler — placeholder registered now so the UUID is stable.
 export const setup: ModuleSetupConfig = {
   defaultRoleFeatures: {
     superadmin: ['channel_office365.view', 'channel_office365.configure'],
@@ -60,8 +78,9 @@ export const setup: ModuleSetupConfig = {
   async onTenantCreated() {
     ensureO365AdapterRegistered()
   },
-  async seedDefaults({ container }) {
+  async seedDefaults({ em, container }) {
     await ensureCalendarSyncSchedule(container)
+    await ensureEmailAttachmentsPartition(em)
   },
 }
 
