@@ -143,8 +143,8 @@ export type AutoLinkResult = {
 
 /**
  * Returns AutoLinkResult with persons and companies maps for all (activity, entity) pairs linked.
- * Email CIs are NOT created here — email-thread-builder.ts creates them with externalMessageId.
  * Meeting CIs (persons + companies) are created in Phase 3.
+ * Email CIs are created by the crm-email-linker subscriber (hub channel path).
  */
 export async function autoLinkActivityToCustomers(
   em: EntityManager,
@@ -366,10 +366,9 @@ export async function autoLinkActivityToCustomers(
     for (const link of personLinks) {
       const pair = pairByActivityId.get(link.activityId)
       // Skip CI creation for pairs without full metadata (e.g. backfill subscriber)
-      // Skip emails — email-thread-builder.ts creates their CIs with externalMessageId populated
+      // Only create CIs for meetings — email CIs are created by the crm-email-linker hub subscriber
       if (!pair?.externalId || !pair.interactionType || pair.interactionType === 'email') continue
 
-      // After the guard above, interactionType is always 'meeting' — email CIs are handled by email-thread-builder
       const source = `office365:calendar:${pair.externalId}`
 
       const ciKey = `${link.entityId}:${source}`

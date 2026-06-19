@@ -99,6 +99,8 @@ export const O365_MAIL_READ_SCOPE = 'https://graph.microsoft.com/Mail.ReadWrite'
 
 // Unified Microsoft 365 channel — one connection per user, capability-based
 export const O365_PROVIDER_KEY = 'office365'
+// Separate channel registered in the hub for email (adapter providerKey)
+export const O365_MAIL_PROVIDER_KEY = 'office365_mail'
 export const O365_INTEGRATION_ID = 'channel_office365'
 
 // externalProvider values on Activity records — semantic identifiers for data origin.

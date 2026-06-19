@@ -172,7 +172,7 @@ export async function GET(request: Request): Promise<Response> {
     }
   })
 
-  // Step 6c: verify constraint names that email-thread-builder relies on
+  // Step 6c: verify constraint names used by hub email CRM linking
   result.step6c_constraints = await safeQuery('constraints', async () => {
     const rows = await conn.execute(
       `SELECT conname, contype FROM pg_constraint

@@ -1,6 +1,7 @@
 'use client'
 import * as React from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { Page, PageHeader, PageBody } from '@open-mercato/ui/backend/Page'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Alert } from '@open-mercato/ui/primitives/alert'
@@ -8,7 +9,7 @@ import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Calendar, Mail, CheckCircle, AlertCircle, RefreshCw, ExternalLink, Info, Trash2 } from 'lucide-react'
-import { O365_MAIL_READ_SCOPE, O365_PROVIDER_KEY } from '../../../lib/credentials'
+import { O365_MAIL_READ_SCOPE, O365_PROVIDER_KEY, O365_MAIL_PROVIDER_KEY } from '../../../lib/credentials'
 
 type ChannelRow = {
   id: string
@@ -40,13 +41,40 @@ type ChannelStateRow = {
 export default function Office365Page() {
   const t = useT()
   const queryClient = useQueryClient()
+  const searchParams = useSearchParams()
+  const router = useRouter()
   const [connecting, setConnecting] = React.useState(false)
   const [syncingId, setSyncingId] = React.useState<string | null>(null)
   const [mailSyncingId, setMailSyncingId] = React.useState<string | null>(null)
   const [togglingId, setTogglingId] = React.useState<string | null>(null)
   const [calendarSyncFrom, setCalendarSyncFrom] = React.useState('')
-  const [mailSyncFrom, setMailSyncFrom] = React.useState('')
   const [resettingId, setResettingId] = React.useState<string | null>(null)
+
+  // After OAuth callback the hub redirects here with ?flash=connected.
+  // Provision the sibling email channel (office365_mail) automatically.
+  React.useEffect(() => {
+    if (searchParams.get('flash') !== 'connected') return
+    void (async () => {
+      try {
+        const r = await apiCall('/api/channel_office365/channel_office365/provision-email-channel', {
+          method: 'POST',
+          body: JSON.stringify({}),
+        })
+        if (!r.ok && r.status !== 422) {
+          // 422 = no calendar channel yet (unlikely on first connect), not a hard error
+          console.warn('[channel_office365] email channel provisioning failed', r.status)
+        }
+      } catch (err) {
+        console.warn('[channel_office365] email channel provisioning error', err)
+      }
+      // Remove ?flash param from URL without adding a history entry
+      const url = new URL(window.location.href)
+      url.searchParams.delete('flash')
+      router.replace(url.pathname + (url.search || ''))
+    })()
+  // Run once per flash=connected landing
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['channel_office365_channels'],
@@ -69,6 +97,8 @@ export default function Office365Page() {
   })
 
   const channels = (data?.items ?? []).filter((c) => c.providerKey === O365_PROVIDER_KEY)
+  // Email channel (hub-managed, office365_mail) — at most 1 per user
+  const emailChannel = (data?.items ?? []).find((c) => c.providerKey === O365_MAIL_PROVIDER_KEY) ?? null
 
   const stateById = React.useMemo(() => {
     const map = new Map<string, ChannelStateRow>()
@@ -151,21 +181,19 @@ export default function Office365Page() {
     }
   }
 
-  async function handleMailSyncNow(channelId: string, syncFromDate?: string) {
-    setMailSyncingId(channelId)
+  async function handleMailSyncNow(calendarChannelId: string) {
+    if (!emailChannel) {
+      flash(t('channel_office365.mailSync.noChannel', 'Email channel not provisioned — reconnect Microsoft 365'), 'error')
+      return
+    }
+    setMailSyncingId(calendarChannelId)
     try {
-      const body: Record<string, unknown> = { channelId }
-      if (syncFromDate) {
-        body.syncFromDate = new Date(syncFromDate).toISOString()
-        body.resetDelta = true
-      }
-      const r = await apiCall('/api/channel_office365/channel_office365/mail-sync-now', {
+      const r = await apiCall(`/api/communication_channels/channels/${emailChannel.id}/poll-now`, {
         method: 'POST',
-        body: JSON.stringify(body),
+        body: JSON.stringify({}),
       })
       if (r.ok) {
-        flash(t('channel_office365.mailSync.success', 'Emails synced — they will appear shortly'), 'success')
-        if (syncFromDate) setMailSyncFrom('')
+        flash(t('channel_office365.mailSync.success', 'Email sync queued — messages will appear shortly'), 'success')
         setTimeout(() => {
           void queryClient.invalidateQueries({ queryKey: ['channel_office365_state'] })
         }, 3000)
@@ -437,29 +465,6 @@ export default function Office365Page() {
                           </Button>
                         </div>
                       </div>
-                      {mailEnabled && (
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-xs text-muted-foreground whitespace-nowrap">
-                            {t('channel_office365.resetSync.from', 'Reset & sync from:')}
-                          </span>
-                          <input
-                            type="date"
-                            value={mailSyncFrom}
-                            onChange={(e) => setMailSyncFrom(e.target.value)}
-                            className="text-xs border rounded px-1.5 py-1 bg-background"
-                          />
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => void handleMailSyncNow(channel.id, mailSyncFrom)}
-                            disabled={!mailSyncFrom || mailSyncingId === channel.id}
-                            aria-label={t('channel_office365.resetSync.button', 'Reset and sync from selected date')}
-                          >
-                            <RefreshCw className="size-3.5 mr-1" />
-                            {t('channel_office365.resetSync.button', 'Reset & sync')}
-                          </Button>
-                        </div>
-                      )}
                     </div>
 
                     {/* Reset sync data — destroys O365-synced calendar/mail data, not CRM records */}
