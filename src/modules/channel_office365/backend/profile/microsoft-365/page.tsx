@@ -48,6 +48,7 @@ export default function Office365Page() {
   const [mailSyncingId, setMailSyncingId] = React.useState<string | null>(null)
   const [togglingId, setTogglingId] = React.useState<string | null>(null)
   const [togglingAttachments, setTogglingAttachments] = React.useState(false)
+  const [importingHistory, setImportingHistory] = React.useState(false)
   const [calendarSyncFrom, setCalendarSyncFrom] = React.useState('')
   const [resettingId, setResettingId] = React.useState<string | null>(null)
 
@@ -154,7 +155,13 @@ export default function Office365Page() {
   }
 
   async function handleDisconnect(channelId: string) {
-    if (!confirm(t('channel_office365.disconnect.confirm', 'Disconnect Microsoft 365? All sync will stop.'))) return
+    const confirmMessage = syncAttachments
+      ? t(
+          'channel_office365.disconnect.confirm.withAttachments',
+          'Odłączasz konto Microsoft 365.\n\nPobrane wcześniej załączniki emaili pozostają dostępne w Open Mercato.\nNowe załączniki nie będą synchronizowane po odłączeniu.',
+        )
+      : t('channel_office365.disconnect.confirm', 'Disconnect Microsoft 365? All sync will stop.')
+    if (!confirm(confirmMessage)) return
     try {
       const r = await apiCall(`/api/communication_channels/channels/${channelId}`, { method: 'DELETE' })
       if (r.ok) {
@@ -244,6 +251,29 @@ export default function Office365Page() {
       flash(t('channel_office365.attachments.error', 'Nie udało się zmienić ustawień'), 'error')
     } finally {
       setTogglingAttachments(false)
+    }
+  }
+
+  async function handleImportHistory() {
+    if (!emailChannel) {
+      flash(t('channel_office365.mailSync.noChannel', 'Email channel not provisioned — reconnect Microsoft 365'), 'error')
+      return
+    }
+    setImportingHistory(true)
+    try {
+      const r = await apiCall(`/api/communication_channels/channels/${emailChannel.id}/import-history`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      })
+      if (r.ok) {
+        flash(t('channel_office365.importHistory.success', 'Import historii emaili uruchomiony — może potrwać kilka minut'), 'success')
+      } else {
+        flash(t('channel_office365.importHistory.error', 'Nie udało się uruchomić importu historii'), 'error')
+      }
+    } catch {
+      flash(t('channel_office365.importHistory.error', 'Nie udało się uruchomić importu historii'), 'error')
+    } finally {
+      setImportingHistory(false)
     }
   }
 
@@ -530,6 +560,34 @@ export default function Office365Page() {
                         </div>
                       </div>
                     </div>
+
+                    {/* Migration notice — emails via hub adapter since 2026-06-19; older records live in activity timeline */}
+                    {mailEnabled && (
+                      <Alert variant="default" className="py-2">
+                        <Info className="size-4 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium">
+                            {t('channel_office365.migration.title', 'Synchronizacja emaili przez nową ścieżkę od 2026-06-19')}
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {t(
+                              'channel_office365.migration.description',
+                              'Starsze wiadomości są widoczne w Osi czasu aktywności. Nowe emaile trafiają do zakładki E-maile.',
+                            )}
+                          </p>
+                          <button
+                            type="button"
+                            className="mt-1 text-xs underline underline-offset-2 hover:text-foreground transition-colors disabled:opacity-50"
+                            onClick={() => void handleImportHistory()}
+                            disabled={importingHistory || !emailChannel}
+                          >
+                            {importingHistory
+                              ? t('channel_office365.importHistory.running', 'Importowanie…')
+                              : t('channel_office365.importHistory.cta', 'Zaimportuj historię →')}
+                          </button>
+                        </div>
+                      </Alert>
+                    )}
 
                     {/* Attachments toggle — only shown when email sync is enabled */}
                     {mailEnabled && (
