@@ -324,19 +324,35 @@ export async function syncChannel(
 
           const existing = existingMap.get(event.id)
           if (existing) {
-            existing.subject = subject
-            existing.notes = notes
-            existing.dueAt = startDate
-            existing.durationMinutes = durationMinutes
-            existing.location = event.location?.displayName ?? null
-            existing.allDay = event.isAllDay ?? false
-            existing.participants = participants.length > 0 ? participants : null
-            existing.metadata = metadata
-            existing.visibility = 'team'
-            existing.lastSyncedAt = new Date()
-            existing.updatedAt = new Date()
-            pendingLinks.push({ entity: existing, participants })
-            pendingRegistryEntries.push({ entity: existing, externalId: event.id, etag: event.changeKey })
+            // CRM is master: if the activity was edited in CRM after the last sync,
+            // keep the CRM version. Only update the registry etag to avoid re-triggering.
+            const registryRow = registryByExternalId.get(event.id)
+            const crmEditedSinceLastSync = registryRow?.lastSyncedAt
+              ? existing.updatedAt > registryRow.lastSyncedAt
+              : false
+            if (crmEditedSinceLastSync) {
+              console.info(
+                `[channel_office365:calendar-sync] crm-master: keeping CRM version of activity ${existing.id} ` +
+                `(crmUpdatedAt=${existing.updatedAt.toISOString()}, lastSyncedAt=${registryRow?.lastSyncedAt?.toISOString()})`,
+              )
+              pendingRegistryEntries.push({ entity: existing, externalId: event.id, etag: event.changeKey })
+            } else {
+              existing.subject = subject
+              existing.notes = notes
+              existing.dueAt = startDate
+              existing.durationMinutes = durationMinutes
+              existing.location = event.location?.displayName ?? null
+              existing.allDay = event.isAllDay ?? false
+              existing.participants = participants.length > 0 ? participants : null
+              existing.metadata = metadata
+              existing.visibility = 'team'
+              existing.lastSyncedAt = new Date()
+              // updatedAt is intentionally NOT updated during inbound sync —
+              // only user edits should set it so that conflict detection
+              // (updatedAt > registryRow.lastSyncedAt) works correctly.
+              pendingLinks.push({ entity: existing, participants })
+              pendingRegistryEntries.push({ entity: existing, externalId: event.id, etag: event.changeKey })
+            }
           } else {
             const newActivity = em.create(Activity, {
               tenantId: scope.tenantId,

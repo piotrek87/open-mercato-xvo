@@ -1,8 +1,11 @@
 /**
  * ConflictLogger — detect and record sync conflicts between OM and O365.
  *
- * Sprint 8A strategy: last-write-wins + log to conflict_meta.
- * Architecture supports future: 'pending' resolution + UI for manual override.
+ * Strategy: CRM is master.
+ * - Outbound (CRM → O365): OM always wins. PATCH fires regardless of O365 state.
+ *   Conflict is logged to conflict_meta for auditing only.
+ * - Inbound (O365 → CRM): handled in calendar-sync.ts via updatedAt > lastSyncedAt guard.
+ *   detectConflict() is used outbound-only; inbound skips O365 update when CRM is newer.
  */
 
 import type { ConflictMeta, ConflictResolution, SyncRegistryRow } from './sync-types'
