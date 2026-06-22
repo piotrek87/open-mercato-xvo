@@ -177,6 +177,27 @@ if (parseBooleanWithDefault(process.env.OM_ENABLE_STORAGE_S3, false)) {
   enabledModules.push({ id: 'storage_s3', from: '@open-mercato/storage-s3' })
 }
 
+// When CUSTOMER_INTERACTION_DEPRECATED=true:
+// - Hides the built-in CustomerInteraction list page (/backend/customer-interactions)
+//   from the navigation (the redirect page in activities module handles the URL).
+// - CI tab on customer detail pages can be separately hidden via customers module overrides
+//   once the data migration is confirmed complete.
+if (parseBooleanWithDefault(process.env.CUSTOMER_INTERACTION_DEPRECATED, false)) {
+  const customersEntry = enabledModules.find((m) => m.id === 'customers')
+  if (customersEntry) {
+    customersEntry.overrides = {
+      ...customersEntry.overrides,
+      routes: {
+        ...customersEntry.overrides?.routes,
+        pages: {
+          ...customersEntry.overrides?.routes?.pages,
+          '/backend/customer-interactions': null,
+        },
+      },
+    }
+  }
+}
+
 const enterpriseModulesEnabled = parseBooleanWithDefault(process.env.OM_ENABLE_ENTERPRISE_MODULES, false)
 const enterpriseSsoEnabled = parseBooleanWithDefault(process.env.OM_ENABLE_ENTERPRISE_MODULES_SSO, false)
 const enterpriseSecurityEnabled = parseBooleanWithDefault(process.env.OM_ENABLE_ENTERPRISE_MODULES_SECURITY, false)
