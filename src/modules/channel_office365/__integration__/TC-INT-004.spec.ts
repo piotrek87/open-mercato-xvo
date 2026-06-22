@@ -64,8 +64,9 @@ test.describe('TC-INT-004 — UI M365 z aktywnym kanałem email', () => {
     await login(page, 'admin')
     await page.goto(PAGE_PATH, { waitUntil: 'domcontentloaded' })
 
+    // Use exact label to avoid strict mode violation with secondary "jest wyłączona" text
     await expect(
-      page.getByText(/synchronizacja za.+cznik/i),
+      page.getByText('Synchronizacja załączników', { exact: true }),
     ).toBeVisible()
   })
 
