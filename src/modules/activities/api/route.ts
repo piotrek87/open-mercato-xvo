@@ -50,6 +50,8 @@ const listQuerySchema = z.object({
   cursor: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(25),
   sort: z.enum(['asc', 'desc']).optional().default('desc'),
+  q: z.string().max(200).optional(),
+  overdue: z.enum(['true', 'false']).optional(),
 })
 
 // --- Response DTO ---
@@ -185,6 +187,32 @@ export async function GET(request: Request) {
             { visibility: { $ne: 'private' } },
             { visibility: 'private', ownerUserId: auth.sub },
           ],
+        },
+      ]
+    }
+
+    // Full-text search on subject and notes (ILIKE)
+    if (query.q) {
+      const term = `%${query.q.replace(/%/g, '\\%').replace(/_/g, '\\_')}%`
+      where['$and'] = [
+        ...(Array.isArray(where['$and']) ? where['$and'] : []),
+        {
+          $or: [
+            { subject: { $ilike: term } },
+            { notes: { $ilike: term } },
+          ],
+        },
+      ]
+    }
+
+    // Overdue filter: dueAt in the past, not yet completed/cancelled
+    if (query.overdue === 'true') {
+      const now = new Date()
+      where['$and'] = [
+        ...(Array.isArray(where['$and']) ? where['$and'] : []),
+        {
+          dueAt: { $lt: now, $ne: null },
+          status: { $nin: ['completed', 'cancelled'] },
         },
       ]
     }

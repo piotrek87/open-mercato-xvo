@@ -11,7 +11,7 @@ import { Button } from '@open-mercato/ui/primitives/button'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { ActivityTypeDefinition } from '../../../activity-types'
 import DefaultActivityCard, { type ActivityCardData } from './DefaultActivityCard'
-import ActivityFilterBar from './ActivityFilterBar'
+import ActivityFilterBar, { type QuickFilter } from './ActivityFilterBar'
 import InlineActivityComposer from './InlineActivityComposer'
 import LogActivityDrawer from './LogActivityDrawer'
 import type { ActivityResponseDto } from './LogActivityDrawer'
@@ -259,6 +259,10 @@ export default function ActivityTimelineWidget({ context }: InjectionWidgetCompo
 
   // Filters
   const [activityTypeFilter, setActivityTypeFilter] = React.useState<string | null>(null)
+  const [quickFilter, setQuickFilter] = React.useState<QuickFilter>(null)
+  const [dateFrom, setDateFrom] = React.useState('')
+  const [dateTo, setDateTo] = React.useState('')
+  const [currentUserId, setCurrentUserId] = React.useState<string | null>(null)
   const [sortDir, setSortDir] = React.useState<'asc' | 'desc'>('desc')
 
   const [total, setTotal] = React.useState<number | null>(null)
@@ -273,6 +277,12 @@ export default function ActivityTimelineWidget({ context }: InjectionWidgetCompo
   React.useEffect(() => {
     readApiResultOrThrow<RegistryResponse>('/api/activity-types', undefined, { allowNullResult: true })
       .then((res) => { if (Array.isArray(res?.data)) setTypeRegistry(res.data) })
+      .catch(() => {})
+  }, [])
+
+  React.useEffect(() => {
+    readApiResultOrThrow<{ id: string }>('/api/auth/profile', undefined, { allowNullResult: true })
+      .then((res) => { if (res?.id) setCurrentUserId(res.id) })
       .catch(() => {})
   }, [])
 
@@ -416,8 +426,27 @@ export default function ActivityTimelineWidget({ context }: InjectionWidgetCompo
     if (selectedDay) {
       result = result.filter((i) => toDateKey(getEffectiveDate(i)) === selectedDay)
     }
+    if (quickFilter === 'due_today') {
+      const today = toDateKey(new Date())
+      result = result.filter((i) => i._isOptimistic || (i.dueAt ? toDateKey(new Date(i.dueAt)) === today : false))
+    } else if (quickFilter === 'overdue') {
+      const now = new Date()
+      result = result.filter((i) => {
+        if (i._isOptimistic) return true
+        if (!i.dueAt) return false
+        return new Date(i.dueAt) < now && !['completed', 'cancelled'].includes(i.status)
+      })
+    } else if (quickFilter === 'mine' && currentUserId) {
+      result = result.filter((i) => i._isOptimistic || i.ownerUserId === currentUserId)
+    }
+    if (dateFrom) {
+      result = result.filter((i) => i._isOptimistic || toDateKey(getEffectiveDate(i)) >= dateFrom)
+    }
+    if (dateTo) {
+      result = result.filter((i) => i._isOptimistic || toDateKey(getEffectiveDate(i)) <= dateTo)
+    }
     return result
-  }, [items, activityTypeFilter, selectedDay])
+  }, [items, activityTypeFilter, selectedDay, quickFilter, currentUserId, dateFrom, dateTo])
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -486,12 +515,18 @@ export default function ActivityTimelineWidget({ context }: InjectionWidgetCompo
         onSelectDay={handleSelectDay}
       />
 
-      {/* Type filter chips — server-side */}
+      {/* Filter bar — type chips + quick filters + date range */}
       {typeRegistry.length > 0 && (
         <ActivityFilterBar
           availableTypes={typeRegistry}
           activeFilter={activityTypeFilter}
           onChange={setActivityTypeFilter}
+          quickFilter={quickFilter}
+          onQuickFilterChange={setQuickFilter}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onDateRangeChange={(from, to) => { setDateFrom(from); setDateTo(to) }}
+          currentUserId={currentUserId}
         />
       )}
 

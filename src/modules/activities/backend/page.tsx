@@ -11,7 +11,7 @@ import { Button } from '@open-mercato/ui/primitives/button'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import type { ColumnDef } from '@tanstack/react-table'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { PlusIcon, ChevronLeft, ChevronRight } from 'lucide-react'
+import { PlusIcon, ChevronLeft, ChevronRight, Search, X, AlertCircle, User } from 'lucide-react'
 import { activityTypes } from '../activity-types'
 
 const PAGE_SIZE = 25
@@ -47,13 +47,23 @@ export default function ActivitiesListPage() {
   const t = useT()
   const [activityTypeFilter, setActivityTypeFilter] = React.useState('')
   const [fromFilter, setFromFilter] = React.useState('')
+  const [searchQuery, setSearchQuery] = React.useState('')
+  const [overdueFilter, setOverdueFilter] = React.useState(false)
+  const [myFilter, setMyFilter] = React.useState(false)
+  const [currentUserId, setCurrentUserId] = React.useState<string | null>(null)
   const [cursorStack, setCursorStack] = React.useState<(string | undefined)[]>([undefined])
   const [pageIdx, setPageIdx] = React.useState(0)
 
   const currentCursor = cursorStack[pageIdx]
 
+  React.useEffect(() => {
+    apiCall<{ id: string }>('/api/auth/profile')
+      .then((r) => { if (r.result?.id) setCurrentUserId(r.result.id) })
+      .catch(() => {})
+  }, [])
+
   const { data: response, isLoading, error } = useQuery({
-    queryKey: ['activities', 'list', currentCursor, activityTypeFilter, fromFilter],
+    queryKey: ['activities', 'list', currentCursor, activityTypeFilter, fromFilter, searchQuery, overdueFilter, myFilter],
     queryFn: async () => {
       const params = new URLSearchParams({ limit: String(PAGE_SIZE) })
       if (currentCursor) params.set('cursor', currentCursor)
@@ -62,6 +72,9 @@ export default function ActivitiesListPage() {
         params.set('from', new Date(fromFilter).toISOString())
         params.set('dateField', 'occurredAt')
       }
+      if (searchQuery.trim()) params.set('q', searchQuery.trim())
+      if (overdueFilter) params.set('overdue', 'true')
+      if (myFilter && currentUserId) params.set('ownerUserId', currentUserId)
       const result = await apiCall<ActivitiesListResponse>(`/api/activities?${params}`)
       return result.result
     },
@@ -84,6 +97,21 @@ export default function ActivitiesListPage() {
 
   function handleFromFilter(value: string) {
     setFromFilter(value)
+    resetPagination()
+  }
+
+  function handleSearchQuery(value: string) {
+    setSearchQuery(value)
+    resetPagination()
+  }
+
+  function handleOverdueFilter(val: boolean) {
+    setOverdueFilter(val)
+    resetPagination()
+  }
+
+  function handleMyFilter(val: boolean) {
+    setMyFilter(val)
     resetPagination()
   }
 
@@ -179,6 +207,27 @@ export default function ActivitiesListPage() {
       />
       <PageBody>
         <div className="mb-3 flex items-center gap-3 flex-wrap">
+          <div className="relative flex items-center">
+            <Search className="absolute left-2.5 size-3.5 text-muted-foreground pointer-events-none" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => handleSearchQuery(e.target.value)}
+              placeholder={t('activities.list.filter.search', 'Search activities…')}
+              className="text-sm border rounded-md pl-8 pr-3 py-1.5 bg-background w-52"
+              aria-label={t('activities.list.filter.search', 'Search activities…')}
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => handleSearchQuery('')}
+                className="absolute right-2 text-muted-foreground hover:text-foreground"
+                aria-label={t('activities.list.filter.clearSearch', 'Clear search')}
+              >
+                <X className="size-3.5" />
+              </button>
+            )}
+          </div>
           <select
             value={activityTypeFilter}
             onChange={(e) => handleTypeFilter(e.target.value)}
@@ -207,6 +256,36 @@ export default function ActivitiesListPage() {
                 aria-label={t('activities.list.filter.clearDate', 'Clear date filter')}
               >
                 ✕
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => handleOverdueFilter(!overdueFilter)}
+              className={[
+                'inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors',
+                overdueFilter
+                  ? 'border-status-error-border bg-status-error-bg text-status-error-text'
+                  : 'border-border bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+              ].join(' ')}
+            >
+              <AlertCircle className="size-3" />
+              {t('activities.filter.overdue', 'Overdue')}
+            </button>
+            {currentUserId && (
+              <button
+                type="button"
+                onClick={() => handleMyFilter(!myFilter)}
+                className={[
+                  'inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors',
+                  myFilter
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'border-border bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                ].join(' ')}
+              >
+                <User className="size-3" />
+                {t('activities.filter.mine', 'My activities')}
               </button>
             )}
           </div>
