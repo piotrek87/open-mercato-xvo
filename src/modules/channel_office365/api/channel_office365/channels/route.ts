@@ -5,7 +5,11 @@ import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { CommunicationChannel } from '@open-mercato/core/modules/communication_channels/data/entities'
-import { o365ChannelStateSchema, O365_PROVIDER_KEY } from '../../../lib/credentials'
+import { o365ChannelStateSchema, o365UserCredentialsSchema, O365_PROVIDER_KEY, O365_INTEGRATION_ID } from '../../../lib/credentials'
+
+type CredentialsServiceLike = {
+  resolve: (integrationId: string, scope: { tenantId: string; organizationId: string; userId: string | null }) => Promise<unknown>
+}
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['channel_office365.view'] },
@@ -24,6 +28,10 @@ export async function GET(request: Request): Promise<Response> {
 
   const container = await createRequestContainer()
   const em = (container.resolve('em') as EntityManager).fork()
+  let credentialsService: CredentialsServiceLike | null = null
+  try {
+    credentialsService = container.resolve<CredentialsServiceLike>('integrationCredentialsService')
+  } catch { /* optional — graceful degradation if not registered */ }
 
   const channels = await em.find(CommunicationChannel, {
     tenantId: auth.tenantId as string,
@@ -32,20 +40,40 @@ export async function GET(request: Request): Promise<Response> {
     deletedAt: null,
   })
 
-  const items = channels.map((channel) => {
+  const items = await Promise.all(channels.map(async (channel) => {
     const parsed = o365ChannelStateSchema.safeParse(channel.channelState ?? {})
     const state = parsed.success ? parsed.data : {}
-    const grantedScopes = state.grantedScopes ?? []
+    let grantedScopes = state.grantedScopes ?? []
     const capabilities = state.capabilities ?? {
       calendar: { enabled: true },
       mail: { enabled: false },
     }
+
+    // If grantedScopes is absent from channelState (e.g. before the first calendar sync
+    // has run after a fresh OAuth connect), fall back to reading directly from credentials.
+    if (grantedScopes.length === 0 && credentialsService) {
+      try {
+        const rawCreds = await credentialsService.resolve(O365_INTEGRATION_ID, {
+          tenantId: auth.tenantId as string,
+          organizationId: (auth as { orgId?: string | null }).orgId ?? auth.tenantId as string,
+          userId: auth.sub as string,
+        })
+        const credParsed = o365UserCredentialsSchema.safeParse(rawCreds)
+        if (credParsed.success) {
+          const rawScopes = (credParsed.data as Record<string, unknown>).grantedScopes
+          if (Array.isArray(rawScopes)) {
+            grantedScopes = rawScopes as string[]
+          }
+        }
+      } catch { /* non-fatal */ }
+    }
+
     return {
       id: channel.id,
       grantedScopes,
       capabilities,
     }
-  })
+  }))
 
   return NextResponse.json({ items })
 }

@@ -49,29 +49,52 @@ export default function Office365Page() {
   const [togglingId, setTogglingId] = React.useState<string | null>(null)
   const [togglingAttachments, setTogglingAttachments] = React.useState(false)
   const [importingHistory, setImportingHistory] = React.useState(false)
-  const [calendarSyncFrom, setCalendarSyncFrom] = React.useState('')
+  const [calendarSyncFrom, setCalendarSyncFrom] = React.useState(() => {
+    const d = new Date()
+    d.setDate(d.getDate() - 7)
+    return d.toISOString().slice(0, 10)
+  })
+  const [emailSyncFrom, setEmailSyncFrom] = React.useState(() => {
+    const d = new Date()
+    d.setDate(d.getDate() - 7)
+    return d.toISOString().slice(0, 10)
+  })
   const [resettingId, setResettingId] = React.useState<string | null>(null)
 
-  // After OAuth callback the hub redirects here with ?flash=connected.
-  // Provision the sibling email channel (office365_mail) automatically.
+  // After OAuth callback the hub redirects here with ?flash=connected&channelId=<uuid>.
+  // Provision the sibling email channel (office365_mail) and trigger immediate
+  // calendar sync (instead of waiting up to 5 min for the scheduler).
   React.useEffect(() => {
     if (searchParams.get('flash') !== 'connected') return
+    const channelId = searchParams.get('channelId')
     void (async () => {
-      try {
-        const r = await apiCall('/api/channel_office365/channel_office365/provision-email-channel', {
+      const tasks: Promise<unknown>[] = [
+        apiCall('/api/channel_office365/channel_office365/provision-email-channel', {
           method: 'POST',
           body: JSON.stringify({}),
-        })
-        if (!r.ok && r.status !== 422) {
-          // 422 = no calendar channel yet (unlikely on first connect), not a hard error
-          console.warn('[channel_office365] email channel provisioning failed', r.status)
-        }
-      } catch (err) {
-        console.warn('[channel_office365] email channel provisioning error', err)
+        }).then((r) => {
+          if (!r.ok && r.status !== 422) {
+            console.warn('[channel_office365] email channel provisioning failed', r.status)
+          }
+        }),
+      ]
+      if (channelId) {
+        tasks.push(
+          apiCall('/api/channel_office365/channel_office365/sync-now', {
+            method: 'POST',
+            body: JSON.stringify({ channelId }),
+          }).then((r) => {
+            if (!r.ok) {
+              console.warn('[channel_office365] initial calendar sync failed', r.status)
+            }
+          }),
+        )
       }
-      // Remove ?flash param from URL without adding a history entry
+      await Promise.allSettled(tasks)
+      // Remove ?flash and ?channelId params from URL without adding a history entry
       const url = new URL(window.location.href)
       url.searchParams.delete('flash')
+      url.searchParams.delete('channelId')
       router.replace(url.pathname + (url.search || ''))
     })()
   // Run once per flash=connected landing
@@ -109,6 +132,22 @@ export default function Office365Page() {
     refetchInterval: 60_000,
   })
 
+  // Healing: if calendar channel exists, silently provision the email sibling on first load.
+  // office365_mail is filtered from me/channels (interceptor), so we can't detect its
+  // presence from data.items — instead we always provision once per mount (idempotent).
+  const emailProvisionedRef = React.useRef(false)
+  React.useEffect(() => {
+    if (!data || emailProvisionedRef.current) return
+    const hasCalendar = data.items.some((c) => c.providerKey === O365_PROVIDER_KEY)
+    if (!hasCalendar) return
+    emailProvisionedRef.current = true
+    void apiCall('/api/channel_office365/channel_office365/provision-email-channel', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }).catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data])
+
   const channels = (data?.items ?? []).filter((c) => c.providerKey === O365_PROVIDER_KEY)
   // Email channel (hub-managed, office365_mail) — at most 1 per user
   const emailChannel = (data?.items ?? []).find((c) => c.providerKey === O365_MAIL_PROVIDER_KEY) ?? null
@@ -138,6 +177,13 @@ export default function Office365Page() {
   async function handleConnect() {
     setConnecting(true)
     try {
+      // Remove the sibling email channel before (re-)connecting so the framework's
+      // mailbox_already_connected guard does not block the OAuth callback.
+      // The email channel is re-provisioned automatically after successful OAuth.
+      if (emailChannel) {
+        await apiCall(`/api/communication_channels/channels/${emailChannel.id}`, { method: 'DELETE' }).catch(() => {})
+      }
+
       const r = await apiCall<{ authorizeUrl: string }>(
         `/api/communication_channels/oauth/${O365_PROVIDER_KEY}/initiate`,
         { method: 'POST', body: JSON.stringify({}) },
@@ -195,7 +241,6 @@ export default function Office365Page() {
       })
       if (r.ok) {
         flash(t('channel_office365.sync.success', 'Calendar synced — events will appear shortly'), 'success')
-        if (syncFromDate) setCalendarSyncFrom('')
         setTimeout(() => void refetch(), 3000)
       } else {
         flash(t('channel_office365.sync.error', 'Failed to start sync'), 'error')
@@ -208,13 +253,24 @@ export default function Office365Page() {
   }
 
   async function handleMailSyncNow(calendarChannelId: string) {
-    if (!emailChannel) {
-      flash(t('channel_office365.mailSync.noChannel', 'Email channel not provisioned — reconnect Microsoft 365'), 'error')
-      return
-    }
     setMailSyncingId(calendarChannelId)
     try {
-      const r = await apiCall(`/api/communication_channels/channels/${emailChannel.id}/poll-now`, {
+      // Auto-provision the email channel if it is missing — avoids "reconnect" error
+      // when the user arrives on the page before the healing effect completes.
+      let mailChannelId = emailChannel?.id ?? null
+      if (!mailChannelId) {
+        const provR = await apiCall<{ channelId: string; created: boolean }>(
+          '/api/channel_office365/channel_office365/provision-email-channel',
+          { method: 'POST', body: JSON.stringify({}) },
+        )
+        if (!provR.ok || !provR.result?.channelId) {
+          flash(t('channel_office365.mailSync.noChannel', 'Email channel not provisioned — reconnect Microsoft 365'), 'error')
+          return
+        }
+        mailChannelId = provR.result.channelId
+        void refetch()
+      }
+      const r = await apiCall(`/api/communication_channels/channels/${mailChannelId}/poll-now`, {
         method: 'POST',
         body: JSON.stringify({}),
       })
@@ -260,16 +316,27 @@ export default function Office365Page() {
     }
   }
 
-  async function handleImportHistory() {
-    if (!emailChannel) {
-      flash(t('channel_office365.mailSync.noChannel', 'Email channel not provisioned — reconnect Microsoft 365'), 'error')
-      return
-    }
+  async function handleImportHistory(sinceDays?: number) {
     setImportingHistory(true)
     try {
-      const r = await apiCall(`/api/communication_channels/channels/${emailChannel.id}/import-history`, {
+      // Re-provision to reset channel status to 'connected' — poll workers may have
+      // set status='error' after a transient failure, which would cause import-history
+      // to return 409 even when credentials are valid and poll-now succeeds.
+      let mailChannelId = emailChannel?.id ?? null
+      const provR = await apiCall<{ channelId: string; created: boolean }>(
+        '/api/channel_office365/channel_office365/provision-email-channel',
+        { method: 'POST', body: JSON.stringify({}) },
+      )
+      if (provR.ok && provR.result?.channelId) {
+        mailChannelId = provR.result.channelId
+      } else if (!mailChannelId) {
+        flash(t('channel_office365.mailSync.noChannel', 'Email channel not provisioned — reconnect Microsoft 365'), 'error')
+        return
+      }
+
+      const r = await apiCall(`/api/communication_channels/channels/${mailChannelId}/import-history`, {
         method: 'POST',
-        body: JSON.stringify({}),
+        body: JSON.stringify(sinceDays !== undefined ? { sinceDays } : {}),
       })
       if (r.ok) {
         flash(t('channel_office365.importHistory.success', 'Import historii emaili uruchomiony — może potrwać kilka minut'), 'success')
@@ -324,7 +391,7 @@ export default function Office365Page() {
         void queryClient.invalidateQueries({ queryKey: ['channel_office365_state'] })
       } else {
         const msg = r.status === 422
-          ? t('channel_office365.capability.mail.requiresScope', 'Reconnect to enable email sync (Mail.ReadWrite scope required).')
+          ? t('channel_office365.capability.mail.requiresScope', 'Aby włączyć synchronizację e-mail, kliknij „Połącz ponownie" i zatwierdź dostęp do skrzynki pocztowej w Microsoft 365.')
           : t('channel_office365.capability.toggle.error', 'Failed to update capability')
         flash(msg, 'error')
       }
@@ -340,12 +407,14 @@ export default function Office365Page() {
       <PageHeader
         title={t('channel_office365.page.title', 'Microsoft 365')}
         actions={
-          <Button size="sm" onClick={() => void handleConnect()} disabled={connecting}>
-            <Calendar className="size-4 mr-1.5" />
-            {connecting
-              ? t('channel_office365.connect.connecting', 'Connecting…')
-              : t('channel_office365.connect.button', 'Connect Microsoft 365')}
-          </Button>
+          channels.length === 0 ? (
+            <Button size="sm" onClick={() => void handleConnect()} disabled={connecting}>
+              <Calendar className="size-4 mr-1.5" />
+              {connecting
+                ? t('channel_office365.connect.connecting', 'Connecting…')
+                : t('channel_office365.connect.button', 'Connect Microsoft 365')}
+            </Button>
+          ) : undefined
         }
       />
       <PageBody>
@@ -430,7 +499,7 @@ export default function Office365Page() {
                   <>
                     {/* Calendar sync capability row */}
                     <div className="rounded-md bg-muted/30 px-3 py-2 space-y-2">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
                         <div>
                           <p className="text-xs font-medium">
                             {t('channel_office365.capability.calendar.label', 'Calendar Sync')}
@@ -450,39 +519,27 @@ export default function Office365Page() {
                             </p>
                           )}
                         </div>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => void handleSyncNow(channel.id)}
-                          disabled={syncingId === channel.id}
-                          aria-label={t('channel_office365.sync.button', 'Sync now')}
-                        >
-                          <RefreshCw className={`size-3.5 mr-1 ${syncingId === channel.id ? 'animate-spin' : ''}`} />
-                          {syncingId === channel.id
-                            ? t('channel_office365.sync.syncing', 'Syncing…')
-                            : t('channel_office365.sync.button', 'Sync now')}
-                        </Button>
-                      </div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-xs text-muted-foreground whitespace-nowrap">
-                          {t('channel_office365.resetSync.from', 'Reset & sync from:')}
-                        </span>
-                        <input
-                          type="date"
-                          value={calendarSyncFrom}
-                          onChange={(e) => setCalendarSyncFrom(e.target.value)}
-                          className="text-xs border rounded px-1.5 py-1 bg-background"
-                        />
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => void handleSyncNow(channel.id, calendarSyncFrom)}
-                          disabled={!calendarSyncFrom || syncingId === channel.id}
-                          aria-label={t('channel_office365.resetSync.button', 'Reset and sync from selected date')}
-                        >
-                          <RefreshCw className="size-3.5 mr-1" />
-                          {t('channel_office365.resetSync.button', 'Reset & sync')}
-                        </Button>
+                        <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                          <input
+                            type="date"
+                            value={calendarSyncFrom}
+                            onChange={(e) => setCalendarSyncFrom(e.target.value)}
+                            max={new Date().toISOString().slice(0, 10)}
+                            className="text-xs border rounded px-1.5 py-1 bg-background"
+                          />
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void handleSyncNow(channel.id, calendarSyncFrom)}
+                            disabled={!calendarSyncFrom || syncingId === channel.id}
+                            aria-label={t('channel_office365.resetSync.button', 'Sync calendar from selected date')}
+                          >
+                            <RefreshCw className={`size-3.5 mr-1 ${syncingId === channel.id ? 'animate-spin' : ''}`} />
+                            {syncingId === channel.id
+                              ? t('channel_office365.sync.syncing', 'Syncing…')
+                              : t('channel_office365.resetSync.button', 'Sync')}
+                          </Button>
+                        </div>
                       </div>
                     </div>
 
@@ -511,8 +568,8 @@ export default function Office365Page() {
                     )}
 
                     {/* Email sync capability row */}
-                    <div className="rounded-md bg-muted/30 px-3 py-2 space-y-2">
-                      <div className="flex items-center justify-between">
+                    <div className="rounded-md bg-muted/30 px-3 py-2">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
                         <div>
                           <p className="text-xs font-medium">
                             {t('channel_office365.capability.mail.label', 'Email Sync')}
@@ -532,20 +589,32 @@ export default function Office365Page() {
                             </p>
                           )}
                         </div>
-                        <div className="flex items-center gap-2 shrink-0">
+                        <div className="flex items-center gap-2 shrink-0 flex-wrap">
                           {mailEnabled && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => void handleMailSyncNow(channel.id)}
-                              disabled={mailSyncingId === channel.id}
-                              aria-label={t('channel_office365.mailSync.button', 'Sync email now')}
-                            >
-                              <RefreshCw className={`size-3.5 mr-1 ${mailSyncingId === channel.id ? 'animate-spin' : ''}`} />
-                              {mailSyncingId === channel.id
-                                ? t('channel_office365.mailSync.syncing', 'Syncing…')
-                                : t('channel_office365.sync.button', 'Sync now')}
-                            </Button>
+                            <>
+                              <input
+                                type="date"
+                                value={emailSyncFrom}
+                                onChange={(e) => setEmailSyncFrom(e.target.value)}
+                                max={new Date().toISOString().slice(0, 10)}
+                                className="text-xs border rounded px-1.5 py-1 bg-background"
+                              />
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                  const daysDiff = Math.ceil((Date.now() - new Date(emailSyncFrom).getTime()) / 86400000)
+                                  void handleImportHistory(Math.max(1, Math.min(365, daysDiff)))
+                                }}
+                                disabled={!emailSyncFrom || importingHistory}
+                                aria-label={t('channel_office365.emailSyncFrom.button', 'Sync email from selected date')}
+                              >
+                                <RefreshCw className={`size-3.5 mr-1 ${importingHistory ? 'animate-spin' : ''}`} />
+                                {importingHistory
+                                  ? t('channel_office365.mailSync.syncing', 'Syncing…')
+                                  : t('channel_office365.emailSyncFrom.button', 'Sync')}
+                              </Button>
+                            </>
                           )}
                           <Button
                             size="sm"
@@ -584,12 +653,15 @@ export default function Office365Page() {
                           <button
                             type="button"
                             className="mt-1 text-xs underline underline-offset-2 hover:text-foreground transition-colors disabled:opacity-50"
-                            onClick={() => void handleImportHistory()}
-                            disabled={importingHistory || !emailChannel}
+                            onClick={() => {
+                              const daysDiff = Math.ceil((Date.now() - new Date(emailSyncFrom).getTime()) / 86400000)
+                              void handleImportHistory(Math.max(1, Math.min(365, daysDiff)))
+                            }}
+                            disabled={importingHistory}
                           >
                             {importingHistory
-                              ? t('channel_office365.importHistory.running', 'Importowanie…')
-                              : t('channel_office365.importHistory.cta', 'Zaimportuj historię →')}
+                              ? t('channel_office365.mailSync.syncing', 'Syncing…')
+                              : t('channel_office365.importHistory.cta', 'Synchronizuj od wybranej daty →')}
                           </button>
                         </div>
                       </Alert>
@@ -660,23 +732,27 @@ export default function Office365Page() {
 
                     {/* Mail scope hint — shown when Mail.ReadWrite not yet granted */}
                     {!hasMailScope(channel.id) && (
-                      <div className="flex items-start gap-2 rounded-md bg-muted/50 px-3 py-2">
-                        <Info className="size-3.5 mt-0.5 text-muted-foreground shrink-0" />
-                        <p className="text-xs text-muted-foreground">
-                          {t(
-                            'channel_office365.scope.mailReadHint',
-                            'Reconnect to enable future email sync (Mail.ReadWrite scope).',
-                          )}
-                          {' '}
+                      <Alert variant="default" className="py-2">
+                        <Info className="size-4 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium">
+                            {t('channel_office365.scope.mailReadHint.title', 'Wymagane ponowne połączenie')}
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {t(
+                              'channel_office365.scope.mailReadHint',
+                              'Synchronizacja e-mail wymaga zgody na dostęp do skrzynki pocztowej. Kliknij przycisk poniżej — zostaniesz przekierowany do Microsoft, aby zatwierdzić uprawnienia.',
+                            )}
+                          </p>
                           <button
                             type="button"
-                            className="underline underline-offset-2 hover:text-foreground transition-colors"
+                            className="mt-1.5 text-xs font-medium underline underline-offset-2 hover:text-foreground transition-colors"
                             onClick={() => void handleConnect()}
                           >
-                            {t('channel_office365.scope.reconnectLink', 'Reconnect now')}
+                            {t('channel_office365.scope.reconnectLink', 'Połącz ponownie →')}
                           </button>
-                        </p>
-                      </div>
+                        </div>
+                      </Alert>
                     )}
                   </>
                 )}

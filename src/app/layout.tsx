@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import Script from 'next/script'
 import './globals.css'
 import { bootstrap } from '@/bootstrap'
 import { AppProviders } from '@/components/AppProviders'
@@ -27,22 +28,7 @@ export default async function RootLayout({
   return (
     <html lang={locale} suppressHydrationWarning>
       <head>
-        <script
-          key="om-theme-init"
-          dangerouslySetInnerHTML={{
-            __html: `
-              (function() {
-                try {
-                  var stored = localStorage.getItem('om-theme');
-                  var theme = stored === 'dark' ? 'dark'
-                    : stored === 'light' ? 'light'
-                    : window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-                  if (theme === 'dark') document.documentElement.classList.add('dark');
-                } catch (e) {}
-              })();
-            `,
-          }}
-        />
+        <Script id="om-theme-init" strategy="beforeInteractive" src="/theme-init.js" />
       </head>
       <body className="antialiased" suppressHydrationWarning data-gramm="false">
         <AppProviders locale={locale} dict={dict} demoModeEnabled={demoModeEnabled} noticeBarsEnabled={noticeBarsEnabled}>

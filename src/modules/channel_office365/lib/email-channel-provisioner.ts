@@ -6,16 +6,24 @@
  * SIBLING email channel with providerKey='office365_mail' that shares the same
  * OAuth credentials.
  *
- * Idempotent: calling multiple times for the same (user, tenant, org) is safe —
- * createConnectedChannelRow heals on reconnect, so re-provisioning after a token
- * refresh is handled correctly.
+ * Idempotent: safe to call multiple times. Handles three cases:
+ *   1. Active email channel exists  → update credentials in place
+ *   2. Soft-deleted email channel   → reactivate + update credentials
+ *   3. No email channel             → create new row directly
+ *
+ * We bypass createConnectedChannelRow deliberately: its cross-provider conflict
+ * guard correctly blocks two unrelated providers sharing the same mailbox, but
+ * office365 (calendar) + office365_mail (email) are siblings intentionally
+ * designed to share the same externalIdentifier (the user's email address).
  */
 
 import type { EntityManager } from '@mikro-orm/postgresql'
-import { findOneWithDecryption, findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { CommunicationChannel } from '@open-mercato/core/modules/communication_channels/data/entities'
-import { createConnectedChannelRow } from '@open-mercato/core/modules/communication_channels/lib/connect-channel'
 import { getO365EmailAdapter } from './graph-mail-adapter'
+
+// Polling cadence for email — mirrors EMAIL_POLL_INTERVAL_SECONDS from the hub
+const EMAIL_POLL_INTERVAL_SECONDS = 300
 import { O365_PROVIDER_KEY, O365_MAIL_PROVIDER_KEY } from './credentials'
 
 export interface ProvisionEmailChannelArgs {
@@ -26,7 +34,7 @@ export interface ProvisionEmailChannelArgs {
 
 export interface ProvisionEmailChannelResult {
   channelId: string
-  /** true when a new channel was created, false when an existing channel was updated */
+  /** true when a new channel was created, false when an existing channel was updated/reactivated */
   created: boolean
 }
 
@@ -63,36 +71,77 @@ export async function provisionEmailChannel(
     ? `${calendarChannel.displayName} (Email)`
     : 'Microsoft 365 Email'
 
-  // Check if the email channel already exists so we can report created vs updated
-  const existingEmailChannel = await findOneWithDecryption(
-    em,
-    CommunicationChannel,
-    {
+  const emailAdapter = getO365EmailAdapter()
+  const credentialsAvailable = credentialsRefId !== null
+
+  const applyState = (target: CommunicationChannel, isNew: boolean): void => {
+    target.credentialsRef = credentialsRefId
+    target.externalIdentifier = externalIdentifier ?? null
+    target.displayName = displayName
+    target.channelType = emailAdapter.channelType
+    target.capabilities = emailAdapter.capabilities as unknown as Record<string, unknown>
+    target.isActive = credentialsAvailable
+    target.pollIntervalSeconds = EMAIL_POLL_INTERVAL_SECONDS
+    target.status = credentialsAvailable ? 'connected' : 'requires_reauth'
+    target.lastError = credentialsAvailable ? null : 'credentials_persist_failed'
+    target.deletedAt = null
+    // Align organizationId with auth.orgId so poll-now and me/channels can find this channel
+    target.organizationId = scope.organizationId ?? null
+    // Record the connection date so fetchHistory uses it as the since-cutoff on first sync.
+    // On reconnect (isNew=false), reset to now so we don't re-pull historical emails.
+    // If user explicitly sets syncFromDate in settings, the hub preserves it via nextCursor.
+    const existingState = (target.channelState as Record<string, unknown> | null) ?? {}
+    const keepExistingSyncDate = !isNew && typeof existingState.syncFromDate === 'string'
+    target.channelState = {
+      ...existingState,
+      syncFromDate: keepExistingSyncDate ? existingState.syncFromDate : new Date().toISOString(),
+    }
+  }
+
+  // Prefer active email channel; fall back to a soft-deleted one so we can reactivate
+  // it instead of inserting a duplicate after a DB reset or manual cleanup.
+  const existingEmailChannel =
+    (await findOneWithDecryption(
+      em,
+      CommunicationChannel,
+      { tenantId: scope.tenantId, userId, providerKey: O365_MAIL_PROVIDER_KEY, deletedAt: null },
+      undefined,
+      dscope,
+    )) ??
+    // Non-encrypted lookup — safe to use em.findOne for soft-deleted discovery
+    (await em.findOne(CommunicationChannel, {
       tenantId: scope.tenantId,
       userId,
       providerKey: O365_MAIL_PROVIDER_KEY,
-      deletedAt: null,
-    },
-    undefined,
-    dscope,
-  )
+    }))
 
-  const emailAdapter = getO365EmailAdapter()
-  const channel = await createConnectedChannelRow({
-    em,
-    adapter: emailAdapter,
-    providerKey: O365_MAIL_PROVIDER_KEY,
-    displayName,
-    externalIdentifier,
-    credentialsRefId,
-    userId,
-    scope,
-  })
-
-  return {
-    channelId: channel.id,
-    created: !existingEmailChannel,
+  if (existingEmailChannel) {
+    applyState(existingEmailChannel, false)
+    await em.flush()
+    return { channelId: existingEmailChannel.id, created: false }
   }
+
+  // No existing email channel — create one directly.
+  const newChannel = em.create(CommunicationChannel, {
+    providerKey: O365_MAIL_PROVIDER_KEY,
+    channelType: emailAdapter.channelType,
+    displayName,
+    externalIdentifier: externalIdentifier ?? null,
+    credentialsRef: credentialsRefId,
+    capabilities: emailAdapter.capabilities as unknown as Record<string, unknown>,
+    isActive: credentialsAvailable,
+    userId,
+    isPrimary: false,
+    pollIntervalSeconds: EMAIL_POLL_INTERVAL_SECONDS,
+    status: credentialsAvailable ? 'connected' : 'requires_reauth',
+    lastError: credentialsAvailable ? null : 'credentials_persist_failed',
+    tenantId: scope.tenantId,
+    organizationId: scope.organizationId ?? null,
+    channelState: { syncFromDate: new Date().toISOString() },
+  })
+  em.persist(newChannel)
+  await em.flush()
+  return { channelId: newChannel.id, created: true }
 }
 
 /**

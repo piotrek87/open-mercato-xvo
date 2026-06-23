@@ -137,6 +137,26 @@ export const enabledModules: ModuleEntry[] = [
             },
             metadata: { requireAuth: true, requireFeatures: ['customers.interactions.view'] },
           },
+          // Filter office365_mail from the generic "my channels" list so users
+          // can't accidentally delete the sibling channel and break email sync.
+          'GET /api/communication_channels/me/channels': {
+            handler: async (req: Request) => {
+              const { GET } = await import('./modules/channel_office365/lib/me-channels-filtered')
+              return GET(req)
+            },
+            metadata: { requireAuth: true, requireFeatures: ['communication_channels.connect_user_channel'] },
+          },
+          // When user already has an active office365 channel, redirect to M365
+          // settings page instead of starting a new OAuth flow (prevents
+          // mailbox_already_connected errors from the generic channels page).
+          // Key must use [provider] to match the framework's dynamic route pattern.
+          'POST /api/communication_channels/oauth/[provider]/initiate': {
+            handler: async (req: Request) => {
+              const { POST } = await import('./modules/channel_office365/lib/oauth-initiate-guard')
+              return POST(req)
+            },
+            metadata: { requireAuth: true, requireFeatures: ['communication_channels.connect_user_channel'] },
+          },
         },
       },
     },

@@ -3,16 +3,18 @@
  *
  * Listens to communication_channels.message.received for providerKey='office365_mail'.
  * Extracts participant emails from the MessageChannelLink.channelPayload, looks them up
- * against CRM person primaryEmail (via findWithDecryption — no hash field), and creates
- * CustomerInteraction(email) projection rows so hub emails appear in the built-in
- * "Aktywności" tab on CRM person and company detail pages.
+ * against CRM person primaryEmail (via findWithDecryption — no hash field), and creates:
  *
- * Source dedup key: 'office365:mail:{channelLinkId}' — matches the partial unique index
- * customer_interactions_o365_dedup_idx (source LIKE 'office365:%' AND deleted_at IS NULL).
- * ON CONFLICT DO NOTHING means re-delivery of the hub event is fully idempotent.
+ *  • CustomerInteraction(email) rows in customer_interactions → appear in CRM person/company
+ *    detail tabs (via interactions-get-override.ts)
+ *  • Activity(email) + ActivityLink rows in activities/activity_links → appear in
+ *    /backend/activities (the unified activities list)
  *
- * Company linking: after person CIs are created, looks up company_entity_id for each matched
- * person via customer_person_profiles and creates company CIs as well.
+ * Dedup keys:
+ *  • CI:       source = 'office365:mail:{externalMessageId}' (ExternalMessage UUID, stable)
+ *  • Activity: external_id = externalMessageId + external_provider = 'office365_mail' + org
+ *
+ * Both use ON CONFLICT DO NOTHING so re-delivery of the hub event is fully idempotent.
  */
 
 import { randomUUID } from 'crypto'
@@ -41,7 +43,6 @@ type MessageReceivedPayload = {
   organizationId: string | null
 }
 
-// Mirrors AUTO_LINK_CAP in customer-linker.ts
 const AUTO_LINK_CAP = 10
 
 export const metadata = {
@@ -49,6 +50,27 @@ export const metadata = {
   persistent: true,
   id: 'channel_office365.crm-email-linker',
 }
+
+const CI_COLS = [
+  'id', 'organization_id', 'tenant_id', 'entity_id',
+  'interaction_type', 'title', 'body', 'occurred_at',
+  'author_user_id', 'owner_user_id', 'visibility', 'status',
+  'source', 'duration_minutes', 'location', 'all_day',
+  'participants', 'channel_provider_key', 'pinned', 'created_at', 'updated_at',
+] as const
+
+const ACTIVITY_COLS = [
+  'id', 'organization_id', 'tenant_id',
+  'activity_type', 'lifecycle_mode', 'subject', 'notes', 'status',
+  'occurred_at', 'visibility', 'participants',
+  'external_id', 'external_provider', 'source_type',
+  'is_active', 'all_day', 'created_at', 'updated_at',
+] as const
+
+const ACTIVITY_LINK_COLS = [
+  'id', 'activity_id', 'entity_type', 'entity_id',
+  'is_primary', 'organization_id', 'tenant_id', 'created_at',
+] as const
 
 export default async function handler(
   payload: MessageReceivedPayload,
@@ -64,20 +86,22 @@ export default async function handler(
 
   const em = (ctx.resolve('em') as EntityManager).fork()
 
-  // Load hub link to access channelPayload (participant emails, subject)
+  // Load hub link to access channelPayload (participant emails, subject, direction)
   const link = await em.findOne(MessageChannelLink, { id: payload.channelLinkId })
   if (!link?.channelPayload) return
 
   const cp = link.channelPayload as {
     from?: string | null
+    fromName?: string | null
     to?: string[]
     cc?: string[]
     bcc?: string[]
     subject?: string | null
     direction?: string
+    receivedAt?: string | null
   }
 
-  // Collect all participant email addresses and deduplicate
+  // Collect participant email addresses and deduplicate
   const rawEmails: string[] = [
     ...(cp.from ? [cp.from] : []),
     ...(cp.to ?? []),
@@ -86,11 +110,37 @@ export default async function handler(
   const uniqueEmails = [...new Set(rawEmails.map(e => e.toLowerCase()).filter(Boolean))]
   if (uniqueEmails.length === 0) return
 
-  // Load provider timestamp from ExternalMessage for occurredAt
+  // Get email timestamp.
+  // Prefer receivedAt from channelPayload (set by graph-mail-adapter from Graph API receivedDateTime).
+  // Fall back to ExternalMessage.providerTimestamp if channelPayload doesn't have it (older messages).
   let occurredAt: Date | null = null
-  if (payload.externalMessageId) {
-    const extMsg = await em.findOne(ExternalMessage, { id: payload.externalMessageId })
+  if (cp.receivedAt) {
+    const parsed = new Date(cp.receivedAt)
+    if (!Number.isNaN(parsed.getTime())) occurredAt = parsed
+  }
+  if (!occurredAt) {
+    let extMsg = await em.findOne(ExternalMessage, { id: payload.externalMessageId })
+    if (!extMsg && payload.externalMessageId) {
+      extMsg = await em.findOne(ExternalMessage, { externalMessageId: payload.externalMessageId })
+    }
     occurredAt = extMsg?.providerTimestamp ?? null
+  }
+
+  // Correct Message.sentAt to the original email receive time.
+  // ingest-inbound-message.ts always stores sentAt = now(); fix it here via raw SQL
+  // so the E-maile tab shows the real received date instead of the sync timestamp.
+  if (occurredAt && payload.messageId) {
+    try {
+      await em.getConnection().execute(
+        `UPDATE messages SET sent_at = ? WHERE id = ? AND tenant_id = ?`,
+        [occurredAt, payload.messageId, payload.tenantId],
+      )
+    } catch (err) {
+      console.warn(
+        '[channel_office365:crm-email-linker] Message.sentAt correction failed:',
+        err instanceof Error ? err.message : err,
+      )
+    }
   }
 
   // Build email → customerId[] map for the entire org (decrypts primaryEmail in memory)
@@ -114,19 +164,27 @@ export default async function handler(
 
   if (matchedPersonIds.length === 0) return
 
-  const source = `office365:mail:${link.id}`
+  // Stable dedup key: ExternalMessage UUID (one per unique external message)
+  const source = `office365:mail:${payload.externalMessageId}`
   const title = cp.subject ?? null
   const ciStatus = occurredAt && occurredAt <= now ? 'done' : 'planned'
 
-  const COLS = [
-    'id', 'organization_id', 'tenant_id', 'entity_id',
-    'interaction_type', 'title', 'body', 'occurred_at',
-    'author_user_id', 'owner_user_id', 'visibility', 'status',
-    'source', 'duration_minutes', 'location', 'all_day',
-    'participants', 'channel_provider_key', 'pinned', 'created_at', 'updated_at',
-  ] as const
+  // Build participants JSON for display in UI
+  const participantsList: Array<{ email: string; name?: string }> = []
+  if (cp.from) {
+    const entry: { email: string; name?: string } = { email: cp.from }
+    if (cp.fromName) entry.name = cp.fromName
+    participantsList.push(entry)
+  }
+  for (const email of [...(cp.to ?? []), ...(cp.cc ?? [])]) {
+    const lower = email.toLowerCase()
+    if (!participantsList.some(p => p.email.toLowerCase() === lower)) {
+      participantsList.push({ email })
+    }
+  }
+  const participantsJson = participantsList.length > 0 ? JSON.stringify(participantsList) : null
 
-  // Phase 1: person CustomerInteraction rows
+  // Phase 1: person CustomerInteraction rows (for CRM detail tabs)
   try {
     const personRows = matchedPersonIds.map(personId => [
       randomUUID(),
@@ -135,26 +193,26 @@ export default async function handler(
       personId,
       'email',
       title,
-      null,           // body
+      null,             // body
       occurredAt,
-      null,           // author_user_id
-      null,           // owner_user_id
+      null,             // author_user_id
+      null,             // owner_user_id
       'team',
       ciStatus,
       source,
-      null,           // duration_minutes
-      null,           // location
-      false,          // all_day
-      null,           // participants
+      null,             // duration_minutes
+      null,             // location
+      false,            // all_day
+      participantsJson,
       O365_MAIL_PROVIDER_KEY,
-      false,          // pinned
+      false,            // pinned
       now,
       now,
     ])
 
-    const valueClauses = personRows.map(() => '(' + COLS.map(() => '?').join(', ') + ')').join(', ')
+    const valueClauses = personRows.map(() => '(' + CI_COLS.map(() => '?').join(', ') + ')').join(', ')
     await em.getConnection().execute(
-      `INSERT INTO customer_interactions (${COLS.join(', ')})
+      `INSERT INTO customer_interactions (${CI_COLS.join(', ')})
        VALUES ${valueClauses}
        ON CONFLICT (entity_id, source, organization_id)
        WHERE source LIKE 'office365:%' AND deleted_at IS NULL
@@ -169,24 +227,25 @@ export default async function handler(
     return
   }
 
-  // Phase 2: company CustomerInteraction rows — look up company_entity_id for each person
+  // Phase 2: resolve linked companies and create company CI rows
+  let companyIds: string[] = []
   try {
     const personPlaceholders = matchedPersonIds.map(() => '?').join(', ')
     const companyRows: Array<{ person_id: string; company_id: string }> = await em.getConnection().execute(
-      `SELECT customer_entity_id AS person_id, company_entity_id AS company_id
-       FROM customer_person_profiles
-       WHERE customer_entity_id IN (${personPlaceholders})
-         AND company_entity_id IS NOT NULL`,
+      `SELECT person_entity_id AS person_id, company_entity_id AS company_id
+       FROM customer_person_company_links
+       WHERE person_entity_id IN (${personPlaceholders})
+         AND company_entity_id IS NOT NULL
+         AND deleted_at IS NULL`,
       matchedPersonIds,
     )
-
-    if (companyRows.length === 0) return
 
     const seenCompanyIds = new Set<string>()
     const companyValues: unknown[][] = []
     for (const row of companyRows) {
       if (seenCompanyIds.has(row.company_id)) continue
       seenCompanyIds.add(row.company_id)
+      companyIds.push(row.company_id)
       companyValues.push([
         randomUUID(),
         scope.organizationId,
@@ -204,7 +263,7 @@ export default async function handler(
         null,
         null,
         false,
-        null,
+        participantsJson,
         O365_MAIL_PROVIDER_KEY,
         false,
         now,
@@ -212,20 +271,86 @@ export default async function handler(
       ])
     }
 
-    if (companyValues.length === 0) return
-
-    const companyValueClauses = companyValues.map(() => '(' + COLS.map(() => '?').join(', ') + ')').join(', ')
-    await em.getConnection().execute(
-      `INSERT INTO customer_interactions (${COLS.join(', ')})
-       VALUES ${companyValueClauses}
-       ON CONFLICT (entity_id, source, organization_id)
-       WHERE source LIKE 'office365:%' AND deleted_at IS NULL
-       DO NOTHING`,
-      companyValues.flat(),
-    )
+    if (companyValues.length > 0) {
+      const companyClauses = companyValues.map(() => '(' + CI_COLS.map(() => '?').join(', ') + ')').join(', ')
+      await em.getConnection().execute(
+        `INSERT INTO customer_interactions (${CI_COLS.join(', ')})
+         VALUES ${companyClauses}
+         ON CONFLICT (entity_id, source, organization_id)
+         WHERE source LIKE 'office365:%' AND deleted_at IS NULL
+         DO NOTHING`,
+        companyValues.flat(),
+      )
+    }
   } catch (err) {
     console.warn(
       '[channel_office365:crm-email-linker] company CI insert failed:',
+      err instanceof Error ? err.message : err,
+    )
+  }
+
+  // Phase 3: Activity + ActivityLink rows (for /backend/activities unified list)
+  try {
+    // Check if an Activity for this external message already exists (idempotent)
+    const existingActivity = (await em.getConnection().execute(
+      `SELECT id FROM activities
+       WHERE external_id = ? AND external_provider = ? AND organization_id = ?
+         AND deleted_at IS NULL
+       LIMIT 1`,
+      [payload.externalMessageId, 'office365_mail', scope.organizationId],
+    )) as Array<{ id: string }>
+
+    const activityId = existingActivity[0]?.id ?? randomUUID()
+
+    if (!existingActivity[0]) {
+      await em.getConnection().execute(
+        `INSERT INTO activities (${ACTIVITY_COLS.join(', ')})
+         VALUES (${ACTIVITY_COLS.map(() => '?').join(', ')})`,
+        [
+          activityId,
+          scope.organizationId,
+          scope.tenantId,
+          'email',
+          'fact',
+          title ?? '(no subject)',
+          null,             // notes
+          'fact',           // status for fact lifecycle
+          occurredAt,
+          'team',
+          participantsJson,
+          payload.externalMessageId,  // external_id for dedup
+          'office365_mail',           // external_provider
+          'office365_mail',           // source_type
+          true,             // is_active
+          false,            // all_day
+          now,
+          now,
+        ],
+      )
+    }
+
+    // Create ActivityLink for each matched person
+    for (const [i, personId] of matchedPersonIds.entries()) {
+      await em.getConnection().execute(
+        `INSERT INTO activity_links (${ACTIVITY_LINK_COLS.join(', ')})
+         VALUES (${ACTIVITY_LINK_COLS.map(() => '?').join(', ')})
+         ON CONFLICT (activity_id, entity_type, entity_id) DO NOTHING`,
+        [randomUUID(), activityId, 'customers:person', personId, i === 0, scope.organizationId, scope.tenantId, now],
+      )
+    }
+
+    // Create ActivityLink for each matched company
+    for (const companyId of companyIds) {
+      await em.getConnection().execute(
+        `INSERT INTO activity_links (${ACTIVITY_LINK_COLS.join(', ')})
+         VALUES (${ACTIVITY_LINK_COLS.map(() => '?').join(', ')})
+         ON CONFLICT (activity_id, entity_type, entity_id) DO NOTHING`,
+        [randomUUID(), activityId, 'customers:company', companyId, false, scope.organizationId, scope.tenantId, now],
+      )
+    }
+  } catch (err) {
+    console.warn(
+      '[channel_office365:crm-email-linker] activity insert failed:',
       err instanceof Error ? err.message : err,
     )
   }

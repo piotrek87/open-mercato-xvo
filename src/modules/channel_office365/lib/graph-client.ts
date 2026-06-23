@@ -199,9 +199,11 @@ export async function fetchCalendarDeltaPage(
     // Resume from cursor — the deltaLink already contains all parameters
     url = deltaToken
   } else {
-    // Bootstrap: use user-configured syncFromDate or fallback to now-7d
+    // Bootstrap: use user-configured syncFromDate or fall back to now (channel connection date).
+    // Default is "now" — not a historical window — so a fresh channel only picks up new events.
+    // To import history, set capabilities.calendar.syncFromDate in channel settings.
     const now = new Date()
-    const start = syncFromDate ?? new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+    const start = syncFromDate ?? now
     const end = new Date(now.getTime() + CALENDAR_VIEW_WINDOW_DAYS * 24 * 60 * 60 * 1000)
     const startIso = start.toISOString().replace(/\.\d{3}Z$/, 'Z')
     const endIso = end.toISOString().replace(/\.\d{3}Z$/, 'Z')

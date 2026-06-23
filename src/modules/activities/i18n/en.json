@@ -151,5 +151,30 @@
   "activities.create.error": "Failed to log activity",
 
   "activities.new.title": "New Activity",
-  "activities.new.submit": "Create Activity"
+  "activities.new.submit": "Create Activity",
+
+  "activities.notifications.taskDueSoon.title": "Task due soon",
+  "activities.notifications.taskDueSoon.body": "Task \"{subject}\" is due within 24 hours.",
+  "activities.notifications.taskOverdue.title": "Task overdue",
+  "activities.notifications.taskOverdue.body": "Task \"{subject}\" is overdue.",
+
+  "activities.stats.page.title": "Activity Analytics",
+  "activities.stats.range.30d": "Last 30 days",
+  "activities.stats.range.90d": "Last 90 days",
+  "activities.stats.export.button": "Export CSV",
+  "activities.stats.export.label": "Export activities as CSV",
+  "activities.stats.kpi.total": "Total activities",
+  "activities.stats.kpi.completed": "Completion rate",
+  "activities.stats.kpi.overdue": "Overdue tasks",
+  "activities.stats.chart.volumeByType": "Activity volume by type",
+  "activities.stats.chart.empty": "No data for this period",
+  "activities.stats.table.leaderboard": "Team leaderboard",
+  "activities.stats.table.coldDeals": "Deals going cold (14+ days)",
+  "activities.stats.table.coldDeals.empty": "No cold deals — great!",
+  "activities.stats.table.empty": "No data for this period",
+  "activities.stats.column.owner": "Owner",
+  "activities.stats.column.activities": "Activities",
+  "activities.stats.column.dealId": "Deal ID",
+  "activities.stats.column.daysCold": "Days inactive",
+  "activities.stats.column.lastActivity": "Last activity"
 }

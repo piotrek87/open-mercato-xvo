@@ -7,7 +7,7 @@ const widget: InjectionWidgetModule<Record<string, unknown>, Record<string, unkn
     title: 'Connect Office 365 Calendar',
     description: 'Starts the per-user Microsoft 365 OAuth connection flow.',
     features: ['communication_channels.connect_user_channel'],
-    priority: 110,
+    priority: 130,
     enabled: true,
   },
   Widget: ConnectOffice365Widget,

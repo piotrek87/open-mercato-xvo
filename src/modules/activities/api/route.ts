@@ -191,18 +191,32 @@ export async function GET(request: Request) {
       ]
     }
 
-    // Full-text search on subject and notes (ILIKE)
+    // Full-text search on subject and notes.
+    // These fields are encrypted at rest, so SQL LIKE/ILIKE cannot search them.
+    // We decrypt all tenant activities (scoped) and filter in memory.
+    // For production scale, integrate with the search module instead.
     if (query.q) {
-      const term = `%${query.q.replace(/%/g, '\\%').replace(/_/g, '\\_')}%`
-      where['$and'] = [
-        ...(Array.isArray(where['$and']) ? where['$and'] : []),
-        {
-          $or: [
-            { subject: { $ilike: term } },
-            { notes: { $ilike: term } },
-          ],
-        },
-      ]
+      const qLower = query.q.toLowerCase()
+      const searchEm = em.fork()
+      const searchScope: Record<string, unknown> = { tenantId: auth.tenantId, deletedAt: null }
+      if (orgId) searchScope['organizationId'] = orgId
+      const allActivities = await findWithDecryption<Activity>(
+        searchEm,
+        Activity,
+        searchScope as FilterQuery<Activity>,
+        { limit: 1000 },
+        { tenantId: auth.tenantId, organizationId: orgId ?? '' },
+      )
+      const matchingIds = allActivities
+        .filter((a) =>
+          (a.subject ?? '').toLowerCase().includes(qLower) ||
+          (a.notes ?? '').toLowerCase().includes(qLower),
+        )
+        .map((a) => a.id)
+      if (matchingIds.length === 0) {
+        return NextResponse.json({ data: [], hasMore: false, nextCursor: null, total: 0 })
+      }
+      where['id'] = { $in: matchingIds }
     }
 
     // Overdue filter: dueAt in the past, not yet completed/cancelled

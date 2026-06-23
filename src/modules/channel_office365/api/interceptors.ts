@@ -1,6 +1,7 @@
 import type { ApiInterceptor } from '@open-mercato/shared/lib/crud/api-interceptor'
 
-// GET /api/customers/interactions is now fully handled by the route override in
-// src/modules.ts (channel_office365 overrides.routes.api), which also covers
-// company entity expansion and dealId stripping. No interceptors needed.
+// office365_mail filtering from GET /api/communication_channels/me/channels is
+// handled via a route override in src/modules.ts — interceptors don't run on
+// custom routes that don't call runCustomRouteAfterInterceptors.
+
 export const interceptors: ApiInterceptor[] = []

@@ -105,6 +105,8 @@ const MAIL_SELECT_FULL = [
 interface MailCursorState {
   inbox?: { deltaToken?: string }
   sentItems?: { deltaToken?: string }
+  /** ISO timestamp — used as since-cutoff on bootstrap (no delta token). Set at channel provisioning. */
+  syncFromDate?: string
 }
 
 // ── Capabilities ──────────────────────────────────────────────
@@ -246,6 +248,27 @@ async function drainMailDeltaFull(
   return { messages, nextDeltaToken }
 }
 
+// ── HTML → plain-text helper ──────────────────────────────────
+
+function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 // ── Normalization ─────────────────────────────────────────────
 
 function normalizeGraphMessage(
@@ -260,7 +283,11 @@ function normalizeGraphMessage(
 
   const rawContentType = msg.body?.contentType?.toLowerCase() ?? 'text'
   const bodyFormat: 'html' | 'text' = rawContentType === 'html' ? 'html' : 'text'
-  const bodyContent = msg.body?.content ?? ''
+  // Hub requires a non-empty body — fall back to subject for emails with no body content
+  // (e.g. meeting invites, read-receipts, blank messages).
+  const bodyContent = msg.body?.content?.trim()
+    ? msg.body.content
+    : (msg.subject ? `[${msg.subject}]` : '(no body)')
 
   const timestamp = msg.receivedDateTime
     ? new Date(msg.receivedDateTime)
@@ -286,6 +313,13 @@ function normalizeGraphMessage(
       subject: msg.subject ?? null,
       hasAttachments: msg.hasAttachments ?? false,
       direction,
+      receivedAt: timestamp.toISOString(),
+      // Include body content so ChannelPayloadRendererWidget can render the email body.
+      // The widget checks channelPayload.html (for email/html) or channelPayload.text.
+      // text is always included: EmailThreadsPanel uses it as the plain-text body display.
+      ...(bodyFormat === 'html'
+        ? { html: bodyContent, text: htmlToPlainText(bodyContent) }
+        : { text: bodyContent }),
     },
     channelContentType: `email/${bodyFormat}`,
     channelMetadata: {
@@ -347,14 +381,19 @@ class O365EmailChannelAdapter implements ChannelAdapter {
     const creds = o365UserCredentialsSchema.parse(input.credentials)
 
     // Hub replays HistoryPage.nextCursor as channelState (parsed from JSON).
-    // channelState holds separate deltaLinks for inbox and sentItems.
+    // channelState holds separate deltaLinks for inbox and sentItems plus syncFromDate.
     const cs = parseCursorState(input.channelState ?? {})
     const inboxDelta = cs.inbox?.deltaToken
     const sentItemsDelta = cs.sentItems?.deltaToken
 
+    // Use syncFromDate (set at provisioning = channel connection date) as the since-cutoff
+    // when bootstrapping inbox with no delta token. Default to now so we never pull history
+    // unless the user explicitly configured a past date in channel settings.
+    const syncFromDate = cs.syncFromDate ? new Date(cs.syncFromDate) : new Date()
+
     // Drain both folders in parallel — independent delta streams
     const [inboxResult, sentResult] = await Promise.all([
-      drainMailDeltaFull(creds.accessToken, 'inbox', inboxDelta),
+      drainMailDeltaFull(creds.accessToken, 'inbox', inboxDelta, inboxDelta ? undefined : syncFromDate),
       drainMailDeltaFull(creds.accessToken, 'sentItems', sentItemsDelta),
     ])
 
@@ -369,6 +408,7 @@ class O365EmailChannelAdapter implements ChannelAdapter {
     const newState: MailCursorState = {
       inbox: { deltaToken: inboxResult.nextDeltaToken ?? inboxDelta },
       sentItems: { deltaToken: sentResult.nextDeltaToken ?? sentItemsDelta },
+      syncFromDate: cs.syncFromDate,  // preserve for future syncs
     }
 
     return {

@@ -1,0 +1,1 @@
+(function(){try{var s=localStorage.getItem('om-theme');var t=s==='dark'?'dark':s==='light'?'light':window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';if(t==='dark')document.documentElement.classList.add('dark');}catch(e){}})();

@@ -4,13 +4,13 @@ export const injectionTable: ModuleInjectionTable = {
   'profile:communication-channels:connect': [
     {
       widgetId: 'channel_office365.injection.connect',
-      priority: 110,
+      priority: 130,
     },
   ],
   'menu:topbar:profile-dropdown': [
     {
       widgetId: 'channel_office365.injection.profile-menu',
-      priority: 110,
+      priority: 90,
     },
   ],
 

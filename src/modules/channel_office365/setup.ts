@@ -6,7 +6,8 @@ import {
 } from '@open-mercato/core/modules/communication_channels/lib/adapter-registry-singleton'
 import { AttachmentPartition } from '@open-mercato/core/modules/attachments/data/entities'
 import { getO365CalendarAdapter } from './lib/adapter'
-import { O365_PROVIDER_KEY } from './lib/credentials'
+import { getO365EmailAdapter } from './lib/graph-mail-adapter'
+import { O365_PROVIDER_KEY, O365_MAIL_PROVIDER_KEY } from './lib/credentials'
 
 const EMAIL_ATTACHMENTS_PARTITION = 'email_attachments'
 
@@ -28,12 +29,16 @@ async function ensureEmailAttachmentsPartition(em: EntityManager): Promise<void>
 // Stable UUIDs for scheduler upserts — must be valid UUIDs (ScheduledJob.id is uuid type)
 const CALENDAR_SYNC_SCHEDULE_ID = '3b8f7e4a-2c1d-4e5f-8a9b-0c1d2e3f4a5b'
 
-function ensureO365AdapterRegistered(): void {
-  if (hasChannelAdapter(O365_PROVIDER_KEY)) return
-  registerChannelAdapter(getO365CalendarAdapter())
+function ensureO365AdaptersRegistered(): void {
+  if (!hasChannelAdapter(O365_PROVIDER_KEY)) {
+    registerChannelAdapter(getO365CalendarAdapter())
+  }
+  if (!hasChannelAdapter(O365_MAIL_PROVIDER_KEY)) {
+    registerChannelAdapter(getO365EmailAdapter())
+  }
 }
 
-ensureO365AdapterRegistered()
+ensureO365AdaptersRegistered()
 
 async function ensureCalendarSyncSchedule(
   container: import('awilix').AwilixContainer | undefined,
@@ -76,7 +81,7 @@ export const setup: ModuleSetupConfig = {
     admin: ['channel_office365.view', 'channel_office365.configure', 'channel_office365.manage'],
   },
   async onTenantCreated() {
-    ensureO365AdapterRegistered()
+    ensureO365AdaptersRegistered()
   },
   async seedDefaults({ em, container }) {
     await ensureCalendarSyncSchedule(container)
