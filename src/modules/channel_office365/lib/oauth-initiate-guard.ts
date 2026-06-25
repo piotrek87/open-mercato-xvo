@@ -18,8 +18,7 @@ import { O365_PROVIDER_KEY, O365_MAIL_PROVIDER_KEY } from './credentials'
  *     to return mailbox_already_connected), then delegate to the framework handler.
  *
  * NOTE: Uses createRequestContainer + direct ORM query (not the me/channels route
- * handler) so tenant filtering works regardless of organizationId mismatches or
- * the me-channels-filtered route override that strips office365_mail from responses.
+ * handler) so tenant filtering works regardless of organizationId mismatches.
  */
 export async function POST(req: Request): Promise<Response> {
   const origin = new URL(req.url).origin

@@ -137,12 +137,15 @@ export const enabledModules: ModuleEntry[] = [
             },
             metadata: { requireAuth: true, requireFeatures: ['customers.interactions.view'] },
           },
-          // Filter office365_mail from the generic "my channels" list so users
-          // can't accidentally delete the sibling channel and break email sync.
-          'GET /api/communication_channels/me/channels': {
+          // Guard deleting the office365_mail sibling channel from the generic channels list:
+          // it must be removed via "Disconnect" on the Microsoft 365 settings page (cascade
+          // cleanup), not deleted directly (which would break email sync). The channel is
+          // intentionally NOT hidden from /me/channels anymore — the CRM compose/reply dialog
+          // needs it there to pick it as the outbound send channel.
+          'DELETE /api/communication_channels/channels/[id]': {
             handler: async (req: Request) => {
-              const { GET } = await import('./modules/channel_office365/lib/me-channels-filtered')
-              return GET(req)
+              const { DELETE } = await import('./modules/channel_office365/lib/channel-delete-guard')
+              return DELETE(req)
             },
             metadata: { requireAuth: true, requireFeatures: ['communication_channels.connect_user_channel'] },
           },
