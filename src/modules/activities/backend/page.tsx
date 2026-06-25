@@ -4,7 +4,6 @@ import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { Page, PageHeader, PageBody } from '@open-mercato/ui/backend/Page'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
-import { TruncatedCell } from '@open-mercato/ui/backend/TruncatedCell'
 import { EnumBadge, type EnumBadgeMap } from '@open-mercato/ui/backend/ValueIcons'
 import { EmptyState } from '@open-mercato/ui/backend/EmptyState'
 import { Button } from '@open-mercato/ui/primitives/button'
@@ -143,14 +142,15 @@ export default function ActivitiesListPage() {
         cell: ({ row, getValue }) => {
           const subject = String(getValue() ?? '').trim() || t('activities.list.subject.empty', '(no title)')
           return (
-            <TruncatedCell maxWidth="max-w-[600px]">
-              <Link
-                href={`/backend/activities/${row.original.id}`}
-                className="text-sm hover:underline underline-offset-2"
-              >
-                {subject}
-              </Link>
-            </TruncatedCell>
+            <Link
+              href={`/backend/activities/${row.original.id}`}
+              // Wrap up to 2 lines instead of single-line ellipsis so long email subjects (e.g.
+              // "JIRA Updates for P364A-1363: …") are readable; full text on hover.
+              className="block max-w-[640px] text-sm leading-snug line-clamp-2 hover:underline underline-offset-2"
+              title={subject}
+            >
+              {subject}
+            </Link>
           )
         },
       },

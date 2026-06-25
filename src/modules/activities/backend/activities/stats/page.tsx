@@ -25,6 +25,8 @@ type StatsData = {
   period: { from: string; to: string }
 }
 
+type UserRow = { id: string; name?: string | null; email?: string | null }
+
 // --- Date range presets ---
 
 function getLast30DaysRange() {
@@ -45,6 +47,15 @@ function getRange(preset: RangePreset) {
   return preset === '90d' ? getLast90DaysRange() : getLast30DaysRange()
 }
 
+// Friendly labels for the built-in activity types shown on the volume chart.
+const ACTIVITY_TYPE_LABELS: Record<string, string> = {
+  email: 'E-mail',
+  meeting: 'Spotkanie',
+  call: 'Telefon',
+  note: 'Notatka',
+  task: 'Zadanie',
+}
+
 // --- Page ---
 
 export default function ActivityStatsPage() {
@@ -56,11 +67,28 @@ export default function ActivityStatsPage() {
     queryKey: ['activities-stats', preset],
     queryFn: async () => {
       const params = new URLSearchParams({ from: range.from, to: range.to })
-      // apiCall returns { ok, status, result } — the stats payload is in res.result.data,
-      // NOT res.data. Reading res.data was always undefined → "Failed to load stats" on a 200.
+      // apiCall returns { ok, status, result } — the stats payload is in res.result.data.
       const res = await apiCall<{ data?: StatsData; error?: string }>(`/api/activities/stats?${params}`)
       if (!res.ok || !res.result?.data) throw new Error(res.result?.error ?? 'Failed to load stats')
       return res.result.data
+    },
+  })
+
+  // Resolve leaderboard owner ids → display names (the API returns raw user ids).
+  const ownerIds = React.useMemo(
+    () => [...new Set((data?.leaderboard ?? []).map((r) => r.ownerUserId).filter((v): v is string => !!v))],
+    [data],
+  )
+  const { data: userMap } = useQuery({
+    queryKey: ['activities-stats-users', ownerIds],
+    enabled: ownerIds.length > 0,
+    queryFn: async () => {
+      const res = await apiCall<{ items?: UserRow[] }>(`/api/auth/users?ids=${ownerIds.join(',')}&pageSize=100`)
+      const map = new Map<string, string>()
+      for (const u of res.result?.items ?? []) {
+        map.set(u.id, (u.name?.trim() || u.email?.trim() || u.id))
+      }
+      return map
     },
   })
 
@@ -69,28 +97,36 @@ export default function ActivityStatsPage() {
       ? Math.round((data.kpis.completed / data.kpis.total) * 100)
       : null
 
-  // Build bar chart data for volume by type
+  // Series label (chart legend / tooltip) — translated so nothing English leaks through.
+  const seriesLabel = t('activities.stats.chart.series', 'Liczba')
+
   const volumeChartData: Array<Record<string, string | number>> = (data?.volumeByType ?? []).map((r) => ({
-    name: r.activityType,
-    Activities: r.count,
+    name: ACTIVITY_TYPE_LABELS[r.activityType] ?? r.activityType,
+    [seriesLabel]: r.count,
+  }))
+
+  // Map the owner id to a readable name for display.
+  const leaderboardData: Array<Record<string, unknown>> = (data?.leaderboard ?? []).map((r) => ({
+    owner: (r.ownerUserId ? userMap?.get(r.ownerUserId) : null) ?? r.ownerUserId ?? '—',
+    count: r.count,
   }))
 
   const leaderboardColumns = [
-    { key: 'ownerUserId', header: t('activities.stats.column.owner') ?? 'Owner' },
-    { key: 'count', header: t('activities.stats.column.activities') ?? 'Activities', align: 'right' as const },
+    { key: 'owner', header: t('activities.stats.column.owner', 'Właściciel') },
+    { key: 'count', header: t('activities.stats.column.activities', 'Aktywności'), align: 'right' as const },
   ]
 
   const coldDealColumns = [
-    { key: 'linkedEntityId', header: t('activities.stats.column.dealId') ?? 'Deal ID' },
+    { key: 'linkedEntityId', header: t('activities.stats.column.dealId', 'Szansa') },
     {
       key: 'daysCold',
-      header: t('activities.stats.column.daysCold') ?? 'Days inactive',
+      header: t('activities.stats.column.daysCold', 'Dni bez aktywności'),
       align: 'right' as const,
-      formatter: (v: unknown) => `${v}d`,
+      formatter: (v: unknown) => `${v} dni`,
     },
     {
       key: 'lastActivity',
-      header: t('activities.stats.column.lastActivity') ?? 'Last activity',
+      header: t('activities.stats.column.lastActivity', 'Ostatnia aktywność'),
       formatter: (v: unknown) =>
         v ? new Date(v as string).toLocaleDateString() : '—',
     },
@@ -106,7 +142,7 @@ export default function ActivityStatsPage() {
   return (
     <Page>
       <PageHeader
-        title={t('activities.stats.page.title') ?? 'Activity Analytics'}
+        title={t('activities.stats.page.title', 'Statystyki aktywności')}
         actions={
           <div className="flex items-center gap-2">
             <div className="flex rounded-md border border-border overflow-hidden text-sm">
@@ -121,13 +157,15 @@ export default function ActivityStatsPage() {
                       : 'bg-background text-foreground hover:bg-muted',
                   ].join(' ')}
                 >
-                  {p === '30d' ? t('activities.stats.range.30d') ?? 'Last 30 days' : t('activities.stats.range.90d') ?? 'Last 90 days'}
+                  {p === '30d'
+                    ? t('activities.stats.range.30d', 'Ostatnie 30 dni')
+                    : t('activities.stats.range.90d', 'Ostatnie 90 dni')}
                 </button>
               ))}
             </div>
-            <Button variant="outline" size="sm" onClick={handleExport} aria-label={t('activities.stats.export.label') ?? 'Export CSV'}>
+            <Button variant="outline" size="sm" onClick={handleExport} aria-label={t('activities.stats.export.label', 'Eksportuj CSV')}>
               <Download className="mr-2 size-4" />
-              {t('activities.stats.export.button') ?? 'Export CSV'}
+              {t('activities.stats.export.button', 'Eksportuj CSV')}
             </Button>
           </div>
         }
@@ -137,20 +175,20 @@ export default function ActivityStatsPage() {
           {/* KPI row */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <KpiCard
-              title={t('activities.stats.kpi.total') ?? 'Total activities'}
+              title={t('activities.stats.kpi.total', 'Wszystkie aktywności')}
               value={data?.kpis.total ?? null}
               loading={isLoading}
               error={errMsg}
             />
             <KpiCard
-              title={t('activities.stats.kpi.completed') ?? 'Completed'}
+              title={t('activities.stats.kpi.completed', 'Ukończone')}
               value={completionRate}
               suffix="%"
               loading={isLoading}
               error={errMsg}
             />
             <KpiCard
-              title={t('activities.stats.kpi.overdue') ?? 'Overdue tasks'}
+              title={t('activities.stats.kpi.overdue', 'Zaległe zadania')}
               value={data?.kpis.overdue ?? null}
               loading={isLoading}
               error={errMsg}
@@ -159,35 +197,35 @@ export default function ActivityStatsPage() {
 
           {/* Volume by type */}
           <BarChart
-            title={t('activities.stats.chart.volumeByType') ?? 'Activity volume by type'}
+            title={t('activities.stats.chart.volumeByType', 'Aktywności wg typu')}
             data={volumeChartData}
             index="name"
-            categories={['Activities']}
+            categories={[seriesLabel]}
             loading={isLoading}
             error={errMsg}
             layout="vertical"
-            emptyMessage={t('activities.stats.chart.empty') ?? 'No data for this period'}
+            emptyMessage={t('activities.stats.chart.empty', 'Brak danych w tym okresie')}
           />
 
           {/* Leaderboard + Cold deals side by side */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <TopNTable
-              title={t('activities.stats.table.leaderboard') ?? 'Team leaderboard'}
-              data={(data?.leaderboard ?? []) as Array<Record<string, unknown>>}
+              title={t('activities.stats.table.leaderboard', 'Ranking zespołu')}
+              data={leaderboardData}
               columns={leaderboardColumns}
               loading={isLoading}
               error={errMsg}
               maxRows={10}
-              emptyMessage={t('activities.stats.table.empty') ?? 'No data for this period'}
+              emptyMessage={t('activities.stats.table.empty', 'Brak danych w tym okresie')}
             />
             <TopNTable
-              title={t('activities.stats.table.coldDeals') ?? 'Deals going cold (14+ days)'}
+              title={t('activities.stats.table.coldDeals', 'Stygnące szanse (14+ dni)')}
               data={(data?.coldDeals ?? []) as Array<Record<string, unknown>>}
               columns={coldDealColumns}
               loading={isLoading}
               error={errMsg}
               maxRows={10}
-              emptyMessage={t('activities.stats.table.coldDeals.empty') ?? 'No cold deals — great!'}
+              emptyMessage={t('activities.stats.table.coldDeals.empty', 'Brak stygnących szans — super!')}
             />
           </div>
         </div>
