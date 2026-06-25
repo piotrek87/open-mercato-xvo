@@ -45,6 +45,21 @@ type MessageReceivedPayload = {
 
 const AUTO_LINK_CAP = 10
 
+/**
+ * Derive a human-readable display name from an email address local-part, e.g.
+ * "piotr.kowalczyk@xentivo.pl" → "Piotr Kowalczyk". Used as a fallback so every
+ * participant carries a non-empty `name` (core renderers call `name.charAt(0)`
+ * without a null guard — a name-less participant crashes the interaction view).
+ */
+function nameFromEmail(email: string): string {
+  const local = email.split('@')[0] ?? email
+  const words = local
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+  return words.length > 0 ? words.join(' ') : email
+}
+
 export const metadata = {
   event: 'communication_channels.message.received',
   persistent: true,
@@ -101,6 +116,7 @@ export default async function handler(
     receivedAt?: string | null
     text?: string | null
     html?: string | null
+    markdown?: string | null
   }
 
   // Collect participant email addresses and deduplicate
@@ -169,37 +185,34 @@ export default async function handler(
   // Stable dedup key: ExternalMessage UUID (one per unique external message)
   const source = `office365:mail:${payload.externalMessageId}`
   const title = cp.subject ?? null
-  // Plain-text email body — graph-mail-adapter derives `text` from the HTML with line breaks
-  // preserved. Stored on the Activity (notes) and CustomerInteraction (body) so the detail page
-  // and CRM interaction history show the message content, not just the subject. Capped for safety.
-  const rawBody = typeof cp.text === 'string' ? cp.text.trim() : ''
+  // Email body for the Activity (notes) and CustomerInteraction (body). Prefer the Markdown
+  // rendition (graph-mail-adapter derives it from the HTML): the customers interaction editor
+  // renders markdown, so this yields paragraph breaks + **bold** + lists + links instead of a
+  // run-on plain-text blob. Fall back to plain text. Capped for safety.
+  const rawBody = typeof cp.markdown === 'string' && cp.markdown.trim()
+    ? cp.markdown.trim()
+    : (typeof cp.text === 'string' ? cp.text.trim() : '')
   const bodyText = rawBody ? rawBody.slice(0, 20000) : null
   const ciStatus = occurredAt && occurredAt <= now ? 'done' : 'planned'
 
   // Build participants JSON for display in UI.
   // status values must match what the Activities detail page expects:
   // 'sender' → from, 'recipient' → to, 'cc' → cc, 'bcc' → bcc
-  const participantsList: Array<{ email: string; name?: string; status: string }> = []
-  if (cp.from) {
-    const entry: { email: string; name?: string; status: string } = {
-      email: cp.from,
-      status: 'sender',
-    }
-    if (cp.fromName) entry.name = cp.fromName
-    participantsList.push(entry)
-  }
-  for (const email of (cp.to ?? [])) {
+  //
+  // EVERY participant MUST have a non-empty `name`. Some core renderers (e.g. the customers
+  // ParticipantsField avatar) call `participant.name.charAt(0)` with no null guard, so a
+  // name-less recipient crashes the whole interaction view. Graph only gives us a display name
+  // for the sender (fromName); for to/cc we derive a readable name from the email local-part.
+  const participantsList: Array<{ email: string; name: string; status: string }> = []
+  const pushParticipant = (email: string, status: string, displayName?: string | null): void => {
+    if (!email) return
     const lower = email.toLowerCase()
-    if (!participantsList.some(p => p.email.toLowerCase() === lower)) {
-      participantsList.push({ email, status: 'recipient' })
-    }
+    if (participantsList.some(p => p.email.toLowerCase() === lower)) return
+    participantsList.push({ email, name: displayName?.trim() || nameFromEmail(email), status })
   }
-  for (const email of (cp.cc ?? [])) {
-    const lower = email.toLowerCase()
-    if (!participantsList.some(p => p.email.toLowerCase() === lower)) {
-      participantsList.push({ email, status: 'cc' })
-    }
-  }
+  if (cp.from) pushParticipant(cp.from, 'sender', cp.fromName)
+  for (const email of (cp.to ?? [])) pushParticipant(email, 'recipient')
+  for (const email of (cp.cc ?? [])) pushParticipant(email, 'cc')
   const participantsJson = participantsList.length > 0 ? JSON.stringify(participantsList) : null
 
   // Phase 1: person CustomerInteraction rows (for CRM detail tabs)

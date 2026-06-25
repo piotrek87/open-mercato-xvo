@@ -289,6 +289,75 @@ async function drainMailboxMessagesSince(
   return { messages, maxReceivedDateTime }
 }
 
+/**
+ * Fetch a SINGLE page of mailbox messages. `url` is either the first-page query (built from
+ * sinceCutoff) or an `@odata.nextLink` from a previous page. Returns that page's messages plus
+ * the next link. Used by importHistory so the import worker advances one page at a time —
+ * reporting progress and emitting a heartbeat between pages (a single full-mailbox drain in one
+ * call blew past the worker's 60s no-heartbeat watchdog and was marked "stale").
+ */
+async function fetchMailboxPage(
+  accessToken: string,
+  url: string,
+  excludedFolderIds: Set<string>,
+): Promise<{ messages: GraphMailMessageFull[]; nextLink?: string }> {
+  const raw = (await graphMailFetch(url, accessToken)) as {
+    value?: GraphMailMessageFull[]
+    '@odata.nextLink'?: string
+  }
+  const messages = (raw.value ?? []).filter(
+    (m) => !(m.parentFolderId && excludedFolderIds.has(m.parentFolderId)),
+  )
+  return { messages, nextLink: raw['@odata.nextLink'] }
+}
+
+function buildMailboxQueryUrl(sinceCutoff: Date, pageSize?: number): string {
+  const sinceIso = sinceCutoff.toISOString().replace(/\.\d{3}Z$/, 'Z')
+  const top = pageSize && pageSize > 0 ? `&$top=${pageSize}` : ''
+  return `${GRAPH_BASE}/me/messages?$filter=receivedDateTime ge ${sinceIso}&$select=${MAIL_SELECT_FULL}${top}`
+}
+
+/**
+ * Total mailbox messages matching the since-window — used to give the import progress bar a real
+ * denominator instead of the maxMessages cap (the user rarely has 1000; showing "14/1000" reads as
+ * stuck when it is really e.g. 14/40). Counts across ALL folders (including excluded system ones),
+ * so it can slightly over-count — still far closer to reality than the cap. Best-effort; returns
+ * undefined on any error so the worker falls back to the cap.
+ */
+async function fetchMailboxCountSince(accessToken: string, sinceCutoff: Date): Promise<number | undefined> {
+  const sinceIso = sinceCutoff.toISOString().replace(/\.\d{3}Z$/, 'Z')
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS)
+  try {
+    const res = await fetch(
+      `${GRAPH_BASE}/me/messages?$filter=receivedDateTime ge ${sinceIso}&$count=true&$top=1&$select=id`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          // $count on the messages collection requires the eventual-consistency header.
+          ConsistencyLevel: 'eventual',
+        },
+        signal: controller.signal,
+      },
+    )
+    if (!res.ok) return undefined
+    const body = (await res.json()) as { '@odata.count'?: number }
+    return typeof body['@odata.count'] === 'number' ? body['@odata.count'] : undefined
+  } catch {
+    return undefined
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+// Import pages are intentionally tiny. The hub import worker only updates progress (and its
+// heartbeat) AFTER ingesting a whole page, and ingesting one message — Message + thread match +
+// CRM fan-out — is surprisingly slow here (observed ~10-15s/message). A larger page exceeds the
+// worker's 60s no-heartbeat watchdog and gets marked "stale". 2/page heartbeats every ~20-30s,
+// well under the watchdog, and shows real incremental progress.
+const IMPORT_PAGE_SIZE = 2
+
 // ── HTML → plain-text helper ──────────────────────────────────
 
 function escapeHtmlEntities(text: string): string {
@@ -306,23 +375,104 @@ function plainTextToHtml(text: string): string {
   return `<pre style="white-space:pre-wrap;word-wrap:break-word;font-family:inherit;margin:0">${escapeHtmlEntities(text)}</pre>`
 }
 
-function htmlToPlainText(html: string): string {
-  return html
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n')
-    .replace(/<\/div>/gi, '\n')
-    .replace(/<\/li>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, ' ')
+function decodeHtmlEntities(s: string): string {
+  return s
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&apos;/gi, "'")
+    .replace(/&mdash;/gi, '—')
+    .replace(/&ndash;/gi, '–')
+    .replace(/&hellip;/gi, '…')
+    .replace(/&#(\d+);/g, (_m, code) => String.fromCharCode(Number(code)))
+}
+
+// The customers interaction editor renders the body as markdown/MDX, which throws on angle-bracket
+// tokens ("<user@domain.com>" reads as a malformed JSX tag) and on stray curly braces (read as JS
+// expressions). Strip the brackets around bare emails, then drop any residual <>/{} so the body
+// never breaks the parser. Markdown itself needs none of these characters.
+function stripMdxUnsafe(s: string): string {
+  return s.replace(/<([^<>\s]+@[^<>\s]+)>/g, '$1').replace(/[<>{}]/g, '')
+}
+
+// Trim each line, then collapse 3+ consecutive newlines down to a single blank line.
+function collapseBlankLines(s: string): string {
+  return s
+    .split('\n')
+    .map((line) => line.trim())
+    .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
+}
+
+function htmlToPlainText(html: string): string {
+  const stripped = html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<head[^>]*>[\s\S]*?<\/head>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '\n• ')
+    .replace(/<\/li>/gi, '')
+    .replace(/<\/(td|th)>/gi, ' ')
+    .replace(/<\/(tr|table)>/gi, '\n')
+    .replace(/<\/(p|div|h[1-6]|ul|ol|blockquote|section|article|header|footer)>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+  return stripMdxUnsafe(decodeHtmlEntities(stripped))
+    .replace(/[ \t]+/g, ' ')
+    .split('\n')
+    .map((line) => line.trim())
+    // Markdown collapses single newlines into spaces, so re-join every content line as its own
+    // paragraph (blank line between) — that is what makes the line breaks ("entery") render.
+    .filter(Boolean)
+    .join('\n\n')
+    .trim()
+}
+
+/**
+ * Convert email HTML to lightweight Markdown so the customers interaction editor (which renders
+ * the body as markdown) shows it like a real email: paragraph breaks, **bold**, _italic_, bullet
+ * lists and [text](url) links — instead of a flat, run-on plain-text blob.
+ */
+function htmlToMarkdown(html: string): string {
+  let s = html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<head[^>]*>[\s\S]*?<\/head>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+  // Links → [text](url) (before tags are stripped).
+  s = s.replace(/<a\b[^>]*?href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_m, href, inner) => {
+    const text = String(inner).replace(/<[^>]+>/g, '').trim()
+    return text ? `[${text}](${href})` : String(href)
+  })
+  // Bold / italic.
+  s = s.replace(/<(strong|b)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_m, _tag, inner) => {
+    const t = String(inner).replace(/<[^>]+>/g, '').trim()
+    return t ? `**${t}**` : ''
+  })
+  s = s.replace(/<(em|i)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_m, _tag, inner) => {
+    const t = String(inner).replace(/<[^>]+>/g, '').trim()
+    return t ? `_${t}_` : ''
+  })
+  // Headings → bold paragraph.
+  s = s.replace(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi, (_m, inner) => {
+    const t = String(inner).replace(/<[^>]+>/g, '').trim()
+    return t ? `\n\n**${t}**\n\n` : '\n\n'
+  })
+  // Lists.
+  s = s.replace(/<li[^>]*>/gi, '\n- ').replace(/<\/li>/gi, '')
+  // Breaks + block elements → paragraph break (a single newline would collapse in markdown).
+  s = s
+    .replace(/<br\s*\/?>/gi, '\n\n')
+    .replace(/<\/(td|th)>/gi, ' ')
+    .replace(/<\/(tr|table|p|div|ul|ol|blockquote|section|article|header|footer)>/gi, '\n\n')
+  // Strip remaining tags, decode entities, make MDX-safe, normalise.
+  s = s.replace(/<[^>]+>/g, '')
+  s = stripMdxUnsafe(decodeHtmlEntities(s)).replace(/[ \t]+/g, ' ')
+  return collapseBlankLines(s)
 }
 
 // ── Normalization ─────────────────────────────────────────────
@@ -370,13 +520,16 @@ function normalizeGraphMessage(
       hasAttachments: msg.hasAttachments ?? false,
       direction,
       receivedAt: timestamp.toISOString(),
-      // Always include both html and text so ChannelPayloadRendererWidget uses html.
-      // For plain-text emails, wrap in <pre> with HTML-escaped content so the renderer
-      // never passes raw text through the MDX parser (which chokes on <user@domain.com>
-      // angle-bracket email addresses, treating them as JSX member expressions).
+      // Always include html, text and markdown:
+      //  - html     → ChannelPayloadRendererWidget / E-maile tab (full fidelity)
+      //  - text     → plain-text fallback
+      //  - markdown → CRM interaction body (the customers editor renders markdown, so this gives
+      //               paragraph breaks + **bold** + lists + links instead of a run-on blob)
+      // For plain-text emails, wrap in <pre> with HTML-escaped content so the html renderer never
+      // passes raw text through the MDX parser (which chokes on <user@domain.com> angle brackets).
       ...(bodyFormat === 'html'
-        ? { html: bodyContent, text: htmlToPlainText(bodyContent) }
-        : { html: plainTextToHtml(bodyContent), text: bodyContent }),
+        ? { html: bodyContent, text: htmlToPlainText(bodyContent), markdown: htmlToMarkdown(bodyContent) }
+        : { html: plainTextToHtml(bodyContent), text: bodyContent, markdown: stripMdxUnsafe(bodyContent) }),
     },
     channelContentType: `email/${bodyFormat}`,
     channelMetadata: {
@@ -489,17 +642,42 @@ class O365EmailChannelAdapter implements ChannelAdapter {
 
   async importHistory(input: ImportHistoryInput): Promise<ImportHistoryPage> {
     const creds = o365UserCredentialsSchema.parse(input.credentials)
-    const sinceDays = Math.min(input.sinceDays, 365)
-    const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000)
 
-    const [ownerEmail, excludedFolderIds] = await Promise.all([
-      fetchMailboxOwnerEmail(creds.accessToken),
-      fetchExcludedFolderIds(creds.accessToken),
-    ])
+    // Paginate ONE Graph page per call. The import worker loops on hasMore/nextCursor, updating
+    // progress and emitting a heartbeat between calls — a single full-mailbox drain here exceeded
+    // the worker's 60s no-heartbeat watchdog ("Job stale") and never reported progress.
+    // The cursor carries the next @odata.nextLink plus the resolved owner email + excluded folder
+    // ids so we don't re-resolve them on every page. It is opaque JSON round-tripped by the worker
+    // (NOT the base64 channelState cursor used by fetchHistory).
+    type ImportCursor = { nextLink?: string; ownerEmail?: string | null; excludedFolderIds?: string[] }
+    let cursor: ImportCursor | null = null
+    if (input.cursor) {
+      try { cursor = JSON.parse(input.cursor) as ImportCursor } catch { cursor = null }
+    }
 
-    // Mailbox-wide drain in one shot (bounded by MAIL_MAX_PAGES). The import worker stops when
-    // hasMore is false; the regular poll then keeps the channel current from the watermark.
-    const { messages: raw } = await drainMailboxMessagesSince(creds.accessToken, since, excludedFolderIds)
+    let ownerEmail: string | null
+    let excludedFolderIds: Set<string>
+    let pageUrl: string
+    let totalCandidates: number | undefined
+    if (cursor?.nextLink) {
+      ownerEmail = cursor.ownerEmail ?? null
+      excludedFolderIds = new Set(cursor.excludedFolderIds ?? [])
+      pageUrl = cursor.nextLink
+    } else {
+      const sinceDays = Math.min(input.sinceDays, 365)
+      const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000)
+      const [resolvedOwner, resolvedExcluded, count] = await Promise.all([
+        fetchMailboxOwnerEmail(creds.accessToken),
+        fetchExcludedFolderIds(creds.accessToken),
+        fetchMailboxCountSince(creds.accessToken, since),
+      ])
+      ownerEmail = resolvedOwner
+      excludedFolderIds = resolvedExcluded
+      totalCandidates = count
+      pageUrl = buildMailboxQueryUrl(since, IMPORT_PAGE_SIZE)
+    }
+
+    const { messages: raw, nextLink } = await fetchMailboxPage(creds.accessToken, pageUrl, excludedFolderIds)
 
     const messages = raw
       .filter(m => !m['@removed'] && !m.isDraft)
@@ -509,7 +687,14 @@ class O365EmailChannelAdapter implements ChannelAdapter {
         return normalizeGraphMessage(m, direction)
       })
 
-    return { messages, nextCursor: undefined, hasMore: false }
+    const hasMore = !!nextLink
+    const nextCursor = hasMore
+      ? JSON.stringify({ nextLink, ownerEmail, excludedFolderIds: [...excludedFolderIds] } satisfies ImportCursor)
+      : undefined
+
+    // totalCandidates (first page only) gives the worker a realistic progress denominator instead
+    // of the maxMessages cap. The hub worker reads it on the first page (typeof === 'number').
+    return { messages, nextCursor, hasMore, ...(totalCandidates !== undefined ? { totalCandidates } : {}) }
   }
 
   // ── Send ────────────────────────────────────────────────────

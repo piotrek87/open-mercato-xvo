@@ -2,49 +2,16 @@ import type { ModuleInjectionTable } from '@open-mercato/shared/modules/widgets/
 
 /**
  * Activities module injection table
- * Injects the ActivityTimeline widget as a tab into customer and sales order detail pages.
+ *
+ * The "Microsoft 365" tab (an injected ActivityTimeline widget on customer/sales detail pages)
+ * was removed: O365 activities already appear in the built-in "Aktywności" + "Historia
+ * interakcji" panels via customer_interactions, so a second timeline tab only confused users
+ * about where activities live. The global /backend/activities page is unaffected.
+ *
+ * Left intentionally empty (rather than deleting the file) so the widget can be re-injected
+ * later by re-adding spot mappings here.
  */
-const injectionTable: ModuleInjectionTable = {
-  // Customer person detail page (people route) — Activities tab
-  'customers.person.detail:tabs': [
-    {
-      widgetId: 'activities.injection.timeline',
-      kind: 'tab',
-      groupLabel: 'Microsoft 365',
-      priority: 20,
-    },
-  ],
-
-  // Customer person detail page (people-v2 route) — Activities tab
-  'detail:customers.person:tabs': [
-    {
-      widgetId: 'activities.injection.timeline',
-      kind: 'tab',
-      groupLabel: 'Microsoft 365',
-      priority: 20,
-    },
-  ],
-
-  // Customer company detail page — Activities tab
-  'detail:customers.company:tabs': [
-    {
-      widgetId: 'activities.injection.timeline',
-      kind: 'tab',
-      groupLabel: 'Microsoft 365',
-      priority: 20,
-    },
-  ],
-
-  // Sales order detail page — Activities tab
-  'sales.document.detail.order:tabs': [
-    {
-      widgetId: 'activities.injection.timeline',
-      kind: 'tab',
-      groupLabel: 'Microsoft 365',
-      priority: 20,
-    },
-  ],
-}
+const injectionTable: ModuleInjectionTable = {}
 
 export { injectionTable }
 export default injectionTable
