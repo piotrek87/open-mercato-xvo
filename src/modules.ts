@@ -137,6 +137,18 @@ export const enabledModules: ModuleEntry[] = [
             },
             metadata: { requireAuth: true, requireFeatures: ['customers.interactions.view'] },
           },
+          // Hide the O365 calendar channel from the generic "my channels" list (and thus from the
+          // CRM compose "Send as" picker, which can't send email through a calendar channel and
+          // showed two confusing near-identical entries). The mail channel stays so compose can
+          // pick it. Our M365 settings page + connect widget pass ?includeCalendar=1 for the
+          // unfiltered list.
+          'GET /api/communication_channels/me/channels': {
+            handler: async (req: Request) => {
+              const { GET } = await import('./modules/channel_office365/lib/channel-list-filter')
+              return GET(req)
+            },
+            metadata: { requireAuth: true, requireFeatures: ['communication_channels.connect_user_channel'] },
+          },
           // Guard deleting the office365_mail sibling channel from the generic channels list:
           // it must be removed via "Disconnect" on the Microsoft 365 settings page (cascade
           // cleanup), not deleted directly (which would break email sync). The channel is

@@ -118,7 +118,9 @@ export default function Office365Page() {
     queryKey: ['channel_office365_channels'],
     queryFn: async () => {
       const r = await apiCall<{ items: ChannelRow[]; total: number }>(
-        '/api/communication_channels/me/channels',
+        // includeCalendar=1: this page manages the O365 calendar channel, which is hidden from the
+        // default /me/channels response (so it doesn't appear in the CRM compose "Send as" picker).
+        '/api/communication_channels/me/channels?includeCalendar=1',
       )
       return r.result
     },

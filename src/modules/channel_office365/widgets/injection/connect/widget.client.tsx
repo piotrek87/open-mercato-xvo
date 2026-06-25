@@ -23,7 +23,9 @@ export default function ConnectOffice365Widget(
   const { data } = useQuery({
     queryKey: ['channel_office365.connect.widget'],
     queryFn: async () => {
-      const r = await apiCall<{ items: Channel[] }>('/api/communication_channels/me/channels')
+      // includeCalendar=1: this widget detects the O365 calendar channel, which is hidden from the
+      // default /me/channels response (kept out of the CRM compose "Send as" picker).
+      const r = await apiCall<{ items: Channel[] }>('/api/communication_channels/me/channels?includeCalendar=1')
       return r.result
     },
     staleTime: 30_000,
