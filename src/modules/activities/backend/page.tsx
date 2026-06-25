@@ -138,19 +138,17 @@ export default function ActivitiesListPage() {
     () => [
       {
         accessorKey: 'subject',
-        // Disable the DataTable's built-in single-line TruncatedCell for this column (it caps
-        // cells at ~150-250px and clipped the subject regardless of the cell's own styling).
-        // We render our own 2-line wrapped subject below.
-        meta: { truncate: false },
+        // Widen this column well beyond the DataTable default (~150-250px) so the subject fits on
+        // a single clean line; the DataTable still truncates with an ellipsis past this width and
+        // we add a hover tooltip with the full text.
+        meta: { maxWidth: '720px' },
         header: t('activities.list.column.subject', 'Subject'),
         cell: ({ row, getValue }) => {
           const subject = String(getValue() ?? '').trim() || t('activities.list.subject.empty', '(no title)')
           return (
             <Link
               href={`/backend/activities/${row.original.id}`}
-              // Wrap up to 2 lines instead of single-line ellipsis so long email subjects (e.g.
-              // "JIRA Updates for P364A-1363: …") are readable; full text on hover.
-              className="max-w-[640px] text-sm leading-snug line-clamp-2 hover:underline underline-offset-2"
+              className="text-sm hover:underline underline-offset-2"
               title={subject}
             >
               {subject}

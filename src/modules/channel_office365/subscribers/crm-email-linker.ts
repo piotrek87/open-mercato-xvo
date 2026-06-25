@@ -20,6 +20,7 @@
 import { randomUUID } from 'crypto'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import {
+  CommunicationChannel,
   ExternalMessage,
   MessageChannelLink,
 } from '@open-mercato/core/modules/communication_channels/data/entities'
@@ -79,7 +80,7 @@ const ACTIVITY_COLS = [
   'activity_type', 'lifecycle_mode', 'subject', 'notes', 'status',
   'occurred_at', 'visibility', 'participants',
   'external_id', 'external_provider', 'source_type',
-  'is_active', 'all_day', 'created_at', 'updated_at',
+  'is_active', 'all_day', 'owner_user_id', 'author_user_id', 'created_at', 'updated_at',
 ] as const
 
 const ACTIVITY_LINK_COLS = [
@@ -104,6 +105,14 @@ export default async function handler(
   // Load hub link to access channelPayload (participant emails, subject, direction)
   const link = await em.findOne(MessageChannelLink, { id: payload.channelLinkId })
   if (!link?.channelPayload) return
+
+  // The synced email's owner = the mailbox owner (the staff user who connected this O365 channel).
+  // Stamping it on the Activity/CI makes the activity show up under that user in the team
+  // leaderboard / analytics (synced mail previously had no owner, so it never counted).
+  const channel = payload.channelId
+    ? await em.findOne(CommunicationChannel, { id: payload.channelId })
+    : null
+  const ownerUserId = channel?.userId ?? null
 
   const cp = link.channelPayload as {
     from?: string | null
@@ -236,7 +245,7 @@ export default async function handler(
       bodyText,         // body
       occurredAt,
       null,             // author_user_id
-      null,             // owner_user_id
+      ownerUserId,      // owner_user_id = mailbox owner
       'team',
       ciStatus,
       source,
@@ -295,8 +304,8 @@ export default async function handler(
         title,
         bodyText,
         occurredAt,
-        null,
-        null,
+        null,             // author_user_id
+        ownerUserId,      // owner_user_id = mailbox owner
         'team',
         ciStatus,
         source,
@@ -363,6 +372,8 @@ export default async function handler(
           'office365_mail',           // source_type
           true,             // is_active
           false,            // all_day
+          ownerUserId,      // owner_user_id = mailbox owner (drives the activity leaderboard)
+          ownerUserId,      // author_user_id
           now,
           now,
         ],
