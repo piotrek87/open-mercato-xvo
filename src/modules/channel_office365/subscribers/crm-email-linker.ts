@@ -213,7 +213,16 @@ export default async function handler(
   if (cp.from) pushParticipant(cp.from, 'sender', cp.fromName)
   for (const email of (cp.to ?? [])) pushParticipant(email, 'recipient')
   for (const email of (cp.cc ?? [])) pushParticipant(email, 'cc')
+
+  // Two participant views:
+  // - Activity (our /backend/activities table + the person-created backfill matcher) keeps EVERY
+  //   participant incl. the sender, so a person added later still matches an email they SENT.
+  // - CustomerInteraction (what the core "Edytuj aktywność" dialog renders as its "DO" field)
+  //   excludes the sender: that dialog lists all participants as recipients with no From/sender
+  //   concept, so showing the sender there is wrong. "DO" = recipients + cc only.
   const participantsJson = participantsList.length > 0 ? JSON.stringify(participantsList) : null
+  const ciParticipants = participantsList.filter((p) => p.status !== 'sender')
+  const ciParticipantsJson = ciParticipants.length > 0 ? JSON.stringify(ciParticipants) : null
 
   // Phase 1: person CustomerInteraction rows (for CRM detail tabs)
   try {
@@ -234,7 +243,7 @@ export default async function handler(
       null,             // duration_minutes
       null,             // location
       false,            // all_day
-      participantsJson,
+      ciParticipantsJson,
       O365_MAIL_PROVIDER_KEY,
       false,            // pinned
       now,
@@ -294,7 +303,7 @@ export default async function handler(
         null,
         null,
         false,
-        participantsJson,
+        ciParticipantsJson,
         O365_MAIL_PROVIDER_KEY,
         false,
         now,

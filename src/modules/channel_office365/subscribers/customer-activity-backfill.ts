@@ -147,7 +147,13 @@ export default async function handler(
     const status = interactionType === 'email'
       ? 'done'
       : (eventTime && eventTime <= now ? 'done' : 'planned')
-    const participantsJson = row.participants != null ? JSON.stringify(row.participants) : null
+    // CustomerInteraction "DO" (core dialog) excludes the email sender — it has no From concept,
+    // so the sender would wrongly appear as a recipient. Keep recipients + cc only here. (The
+    // Activity row this was read from still carries the sender for matching/our own viewer.)
+    const ciParticipants = Array.isArray(row.participants)
+      ? row.participants.filter((p) => p?.status !== 'sender')
+      : null
+    const participantsJson = ciParticipants && ciParticipants.length > 0 ? JSON.stringify(ciParticipants) : null
 
     for (const entityId of entityIds) {
       ciValues.push([
