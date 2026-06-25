@@ -703,8 +703,8 @@ class O365EmailChannelAdapter implements ChannelAdapter {
     const creds = o365UserCredentialsSchema.parse(input.credentials)
     const payload = buildMailPayload(input)
 
-    // 2-step send: create draft → send. Gives us the O365 message ID for
-    // dedup when sentItems polling finds the same message (Sent Items paritet).
+    // 2-step send: create draft → send. The draft response already carries the RFC
+    // internetMessageId, which is STABLE across folders.
     const draft = await graphMailPost('/me/messages', creds.accessToken, payload)
     const draftId = draft.id as string | undefined
     if (!draftId) {
@@ -712,8 +712,16 @@ class O365EmailChannelAdapter implements ChannelAdapter {
     }
     await graphMailPost(`/me/messages/${draftId}/send`, creds.accessToken, null)
 
+    // Return the RFC internetMessageId (not the mutable Graph item id) as externalMessageId.
+    // The hub persists it as the outbound link's channelMetadata.messageId, and the hub's
+    // sent-folder dedup compares exactly that against newly-polled messages. The copy that
+    // sentItems polling later ingests carries the SAME internetMessageId, so it dedupes instead
+    // of creating a second message/conversation. Returning the Graph item id (which changes when
+    // the message moves Drafts → Sent Items) made the sent email show up twice.
+    const internetMessageId = typeof draft.internetMessageId === 'string' ? draft.internetMessageId : null
+
     return {
-      externalMessageId: draftId,
+      externalMessageId: internetMessageId ?? draftId,
       status: 'sent',
     }
   }
