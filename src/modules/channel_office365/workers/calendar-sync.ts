@@ -39,6 +39,7 @@ import {
   O365_EXTERNAL_PROVIDER_CALENDAR,
   O365_INTEGRATION_ID,
   O365_PROVIDER_KEY,
+  O365_MAIL_PROVIDER_KEY,
 } from '../lib/credentials'
 import { getO365CalendarAdapter } from '../lib/adapter'
 import {
@@ -129,11 +130,14 @@ export async function syncChannel(
   const parsedState = o365ChannelStateSchema.safeParse(rawChannelState)
   const channelState: O365ChannelState = parsedState.success ? parsedState.data : {}
 
-  if (channelState.capabilities?.calendar?.enabled === false) {
-    console.info(`[channel_office365:calendar-sync] channel ${channel.id} — calendar disabled, skipping`)
-    return
-  }
-
+  // Resolve + refresh the shared OAuth token FIRST — BEFORE the calendar-capability gate.
+  // The email channel (office365_mail) has no refreshCredentials of its own; it delegates
+  // token refresh to THIS worker via the bundleId credential fallback
+  // (channel_office365_mail → channel_office365). So whenever this channel is active we must
+  // keep the access token fresh here, even if ONLY mail sync (not calendar) is enabled.
+  // Gating refresh behind the calendar capability is what made email "work for an hour then
+  // break": with calendar off, nobody refreshed the shared token, it expired after ~1h, and
+  // the mail poll had no way to recover.
   let rawCreds = await credentialsService.resolve(O365_INTEGRATION_ID, scope)
   if (!rawCreds) {
     console.warn(`[channel_office365:calendar-sync] no credentials for channel ${channel.id} — skipping`)
@@ -147,7 +151,11 @@ export async function syncChannel(
   }
   const creds = parsed.data
   const expiresAt = creds.expiresAt ? new Date(creds.expiresAt) : null
-  const needsRefresh = expiresAt && (expiresAt.getTime() - Date.now()) < 60_000
+  // Refresh window (10 min) MUST exceed the 5-min sync schedule interval so the token is
+  // always refreshed proactively before expiry. A tight 60s window could let the token
+  // expire between two scheduled runs — fatal for email, which cannot self-refresh.
+  const REFRESH_WINDOW_MS = 10 * 60_000
+  const needsRefresh = expiresAt && (expiresAt.getTime() - Date.now()) < REFRESH_WINDOW_MS
   if (needsRefresh && creds.refreshToken) {
     try {
       const tenantClientRaw = await credentialsService.resolve(O365_INTEGRATION_ID, {
@@ -183,6 +191,32 @@ export async function syncChannel(
         return
       }
     }
+  }
+
+  // Mirror the (possibly-refreshed) credentials into the email channel's integration scope.
+  // The hub mail poll (poll-channel worker) resolves `channel_office365_mail`; give it a DIRECT,
+  // always-fresh credential row here instead of relying on the bundleId fallback — that fallback
+  // needs the integration registry (registered in channel_office365/setup.ts) loaded in the
+  // poll-channel worker process, which is NOT guaranteed and yields `accessToken undefined`.
+  // calendar-sync is the SOLE token refresher (the mail adapter has no refreshCredentials), so
+  // writing the mail row here introduces no rotating-refresh-token race.
+  if (credentialsService.save && (rawCreds.accessToken as string | undefined)) {
+    try {
+      await credentialsService.save(`channel_${O365_MAIL_PROVIDER_KEY}`, rawCreds, scope)
+    } catch (mirrorErr) {
+      console.warn(
+        `[channel_office365:calendar-sync] mirror creds to mail scope failed for channel ${channel.id}:`,
+        mirrorErr instanceof Error ? mirrorErr.message : mirrorErr,
+      )
+    }
+  }
+
+  // Calendar EVENT sync runs only when the calendar capability is enabled. The token refresh
+  // above already ran, so email delegation (office365_mail → office365) stays healthy even
+  // when calendar sync is turned off.
+  if (channelState.capabilities?.calendar?.enabled !== true) {
+    console.info(`[channel_office365:calendar-sync] channel ${channel.id} — calendar not enabled; token refreshed, skipping event sync`)
+    return
   }
 
   const accessToken = (rawCreds.accessToken as string | undefined) ?? ''
@@ -308,7 +342,14 @@ export async function syncChannel(
 
           const participants = [...organizerEntry, ...attendeeEntries]
 
-          const subject = event.subject?.trim() || '(no title)'
+          // Calendar events can lack a subject; fall back to a meaningful identifier so the
+          // Activities list never shows a blank "(no title)" in its first column.
+          const organizerLabel = event.organizer?.emailAddress?.name || event.organizer?.emailAddress?.address
+          const firstAttendeeLabel = event.attendees?.[0]?.emailAddress?.name || event.attendees?.[0]?.emailAddress?.address
+          const meetingWith = organizerLabel || firstAttendeeLabel
+          const startLabel = startDate ? startDate.toISOString().slice(0, 16).replace('T', ' ') : null
+          const subject = event.subject?.trim()
+            || (meetingWith ? `Spotkanie: ${meetingWith}` : startLabel ? `Spotkanie ${startLabel}` : 'Spotkanie')
           const notes = event.bodyPreview?.trim() || null
 
           // Teams / online meeting metadata

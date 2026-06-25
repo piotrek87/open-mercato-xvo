@@ -263,10 +263,11 @@ export async function autoLinkActivityToCustomers(
 
     const personPlaceholders = personIds.map(() => '?').join(', ')
     const rows = await em.getConnection().execute(
-      `SELECT customer_entity_id AS person_id, company_entity_id AS company_id
-       FROM customer_person_profiles
-       WHERE customer_entity_id IN (${personPlaceholders})
-         AND company_entity_id IS NOT NULL`,
+      `SELECT person_entity_id AS person_id, company_entity_id AS company_id
+       FROM customer_person_company_links
+       WHERE person_entity_id IN (${personPlaceholders})
+         AND company_entity_id IS NOT NULL
+         AND deleted_at IS NULL`,
       personIds,
     ) as Array<{ person_id: string; company_id: string }>
 

@@ -1,6 +1,6 @@
 'use client'
 import * as React from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { Page, PageHeader, PageBody } from '@open-mercato/ui/backend/Page'
 import { Button } from '@open-mercato/ui/primitives/button'
@@ -36,6 +36,19 @@ type ChannelStateRow = {
     calendar?: CapabilityState
     mail?: CapabilityState
   }
+  // O365 is per-user but a mailbox lives in ONE org at a time (core unique index). These let
+  // the page show the connection from ANY org (single-connection model — manage in its org).
+  organizationId?: string | null
+  isCurrentOrg?: boolean
+  status?: string
+  displayName?: string
+  externalIdentifier?: string | null
+}
+
+type OrgNode = {
+  id: string
+  name: string
+  children?: OrgNode[]
 }
 
 export default function Office365Page() {
@@ -51,12 +64,12 @@ export default function Office365Page() {
   const [importingHistory, setImportingHistory] = React.useState(false)
   const [calendarSyncFrom, setCalendarSyncFrom] = React.useState(() => {
     const d = new Date()
-    d.setDate(d.getDate() - 7)
+    d.setDate(d.getDate() - 1)
     return d.toISOString().slice(0, 10)
   })
   const [emailSyncFrom, setEmailSyncFrom] = React.useState(() => {
     const d = new Date()
-    d.setDate(d.getDate() - 7)
+    d.setDate(d.getDate() - 1)
     return d.toISOString().slice(0, 10)
   })
   const [resettingId, setResettingId] = React.useState<string | null>(null)
@@ -115,10 +128,23 @@ export default function Office365Page() {
   const { data: stateData } = useQuery({
     queryKey: ['channel_office365_state'],
     queryFn: async () => {
-      const r = await apiCall<{ items: ChannelStateRow[] }>('/api/channel_office365/channel_office365/channels')
+      const r = await apiCall<{ items: ChannelStateRow[]; currentOrgId: string | null }>('/api/channel_office365/channel_office365/channels')
       return r.result
     },
+    placeholderData: keepPreviousData,
     refetchInterval: 30_000,
+  })
+
+  // Organizations the user can access — used only to NAME cross-org O365 connections.
+  // O365 connects per organization; this lets the page tell the user which other orgs
+  // are already connected so they understand each org must be connected separately.
+  const { data: orgSwitcher } = useQuery({
+    queryKey: ['channel_office365_org_switcher'],
+    queryFn: async () => {
+      const r = await apiCall<{ items: OrgNode[]; selectedId: string | null }>('/api/directory/organization-switcher')
+      return r.result
+    },
+    staleTime: 5 * 60_000,
   })
 
   const { data: emailSettingsData, refetch: refetchEmailSettings } = useQuery({
@@ -160,6 +186,31 @@ export default function Office365Page() {
     }
     return map
   }, [stateData])
+
+  // Flatten the (hierarchical) org switcher into an id → name lookup.
+  const orgNameById = React.useMemo(() => {
+    const map = new Map<string, string>()
+    const walk = (nodes?: OrgNode[]) => {
+      for (const n of nodes ?? []) {
+        map.set(n.id, n.name)
+        if (n.children?.length) walk(n.children)
+      }
+    }
+    walk(orgSwitcher?.items)
+    return map
+  }, [orgSwitcher])
+
+  // Single-connection model: a mailbox lives in ONE org at a time (core unique index on
+  // tenant+user+provider+mailbox, no org). When the CURRENT org has no channel but the user's
+  // connection lives in ANOTHER org, surface it as connected (manage by switching there)
+  // instead of showing "not connected" + a Connect button that would MOVE the connection here.
+  const elsewhereItem = React.useMemo(() => {
+    if (channels.length > 0) return undefined
+    return (stateData?.items ?? []).find((i) => !i.isCurrentOrg && i.status !== 'disconnected')
+  }, [channels.length, stateData])
+  const elsewhereOrgName = elsewhereItem?.organizationId
+    ? (orgNameById.get(elsewhereItem.organizationId) ?? t('channel_office365.multiOrg.unknownOrg', 'inna organizacja'))
+    : null
 
   function hasMailScope(channelId: string): boolean {
     const scopes = stateById.get(channelId)?.grantedScopes ?? []
@@ -350,16 +401,18 @@ export default function Office365Page() {
     }
   }
 
-  async function handleResetSyncData(channelId: string) {
-    if (!confirm(t(
-      'channel_office365.resetData.confirm',
-      'Wyczyścić wszystkie dane synchronizacji M365? Usunie aktywności, e-maile i spotkania pobrane z Office 365. Rekordy CRM (osoby, firmy, szanse) nie zostaną usunięte.',
-    ))) return
-    setResettingId(channelId)
+  async function handleResetSyncData(channelId: string, target: 'calendar' | 'mail' | 'all' = 'all') {
+    const confirmMsg = target === 'calendar'
+      ? t('channel_office365.resetData.confirm.calendar', 'Wyczyścić zsynchronizowane SPOTKANIA (kalendarz) z M365? E-maile pozostaną. Rekordy CRM (osoby, firmy, szanse) nie zostaną usunięte.')
+      : target === 'mail'
+        ? t('channel_office365.resetData.confirm.mail', 'Wyczyścić zsynchronizowane E-MAILE z M365? Spotkania pozostaną. Rekordy CRM (osoby, firmy, szanse) nie zostaną usunięte.')
+        : t('channel_office365.resetData.confirm', 'Wyczyścić wszystkie dane synchronizacji M365? Usunie aktywności, e-maile i spotkania pobrane z Office 365. Rekordy CRM (osoby, firmy, szanse) nie zostaną usunięte.')
+    if (!confirm(confirmMsg)) return
+    setResettingId(`${channelId}:${target}`)
     try {
       const r = await apiCall('/api/channel_office365/channel_office365/reset-data', {
         method: 'POST',
-        body: JSON.stringify({ channelId }),
+        body: JSON.stringify({ channelId, target }),
       })
       if (r.ok) {
         flash(t('channel_office365.resetData.success', 'Dane synchronizacji wyczyszczone — możesz teraz uruchomić sync od nowa'), 'success')
@@ -389,6 +442,15 @@ export default function Office365Page() {
       if (r.ok) {
         flash(t('channel_office365.capability.toggle.success', 'Capability updated'), 'success')
         void queryClient.invalidateQueries({ queryKey: ['channel_office365_state'] })
+        // Enabling a capability does not sync on its own — the scheduled job runs only every
+        // 5 min, so the user otherwise sees "nothing happened". Trigger an immediate sync.
+        if (enabled) {
+          if (capability === 'calendar') {
+            void handleSyncNow(channelId)
+          } else {
+            void handleMailSyncNow(channelId)
+          }
+        }
       } else {
         const msg = r.status === 422
           ? t('channel_office365.capability.mail.requiresScope', 'Aby włączyć synchronizację e-mail, kliknij „Połącz ponownie" i zatwierdź dostęp do skrzynki pocztowej w Microsoft 365.')
@@ -407,7 +469,7 @@ export default function Office365Page() {
       <PageHeader
         title={t('channel_office365.page.title', 'Microsoft 365')}
         actions={
-          channels.length === 0 ? (
+          channels.length === 0 && !elsewhereItem ? (
             <Button size="sm" onClick={() => void handleConnect()} disabled={connecting}>
               <Calendar className="size-4 mr-1.5" />
               {connecting
@@ -430,7 +492,52 @@ export default function Office365Page() {
               <span>{t('channel_office365.error.load', 'Failed to load connections')}</span>
             </Alert>
           )}
-          {!isLoading && channels.length === 0 && (
+          {/* Single-connection model: the mailbox is connected, but in ANOTHER organization.
+              Show it as connected (manage by switching there) rather than "not connected". */}
+          {!isLoading && channels.length === 0 && elsewhereItem && (
+            <div className="rounded-lg border p-4">
+              <div className="flex items-start gap-3">
+                <CheckCircle className="size-5 text-status-success-text mt-0.5 shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">
+                    {elsewhereItem.displayName || t('channel_office365.multiOrg.connected', 'Microsoft 365 połączony')}
+                  </p>
+                  {elsewhereItem.externalIdentifier && (
+                    <p className="text-xs text-muted-foreground">{elsewhereItem.externalIdentifier}</p>
+                  )}
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {t(
+                      'channel_office365.multiOrg.belongsTo',
+                      'To połączenie należy do organizacji „{org}". Maile i kalendarz synchronizują się tam.',
+                    ).replace('{org}', elsewhereOrgName ?? '')}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {t(
+                      'channel_office365.multiOrg.switchToManage',
+                      'Aby zarządzać synchronizacją (włącz/wyłącz, ręczna synchronizacja, rozłączenie), przełącz się do tej organizacji w przełączniku u góry.',
+                    )}
+                  </p>
+                  <button
+                    type="button"
+                    className="mt-2 text-xs underline underline-offset-2 hover:text-foreground transition-colors disabled:opacity-50"
+                    onClick={() => {
+                      const ok = confirm(
+                        t(
+                          'channel_office365.multiOrg.moveHere.confirm',
+                          'Przenieść połączenie Microsoft 365 do TEJ organizacji? Synchronizacja w „{org}" zostanie zatrzymana; wcześniej pobrane maile pozostaną w tamtej organizacji.',
+                        ).replace('{org}', elsewhereOrgName ?? ''),
+                      )
+                      if (ok) void handleConnect()
+                    }}
+                    disabled={connecting}
+                  >
+                    {t('channel_office365.multiOrg.moveHere.cta', 'Przenieś połączenie do tej organizacji →')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+          {!isLoading && channels.length === 0 && !elsewhereItem && (
             <div className="rounded-lg border border-dashed p-8 text-center">
               <Calendar className="size-8 mx-auto mb-3 text-muted-foreground" />
               <p className="text-sm font-medium">
@@ -447,6 +554,7 @@ export default function Office365Page() {
           {channels.map((channel) => {
             const calCap = getCalendarCap(channel.id)
             const mailCap = getMailCap(channel.id)
+            const calendarEnabled = calCap?.enabled === true
             const mailEnabled = mailCap?.enabled === true
             const isToggling = togglingId === channel.id
 
@@ -504,40 +612,60 @@ export default function Office365Page() {
                           <p className="text-xs font-medium">
                             {t('channel_office365.capability.calendar.label', 'Calendar Sync')}
                           </p>
-                          {calCap?.lastSyncedAt ? (
+                          {calendarEnabled && calCap?.lastSyncedAt ? (
                             <p className="text-xs text-muted-foreground">
                               {t('channel_office365.lastSync', 'Last sync:')} {new Date(calCap.lastSyncedAt).toLocaleString()}
                             </p>
-                          ) : channel.lastPolledAt ? (
+                          ) : !calendarEnabled ? (
                             <p className="text-xs text-muted-foreground">
-                              {t('channel_office365.lastSync', 'Last sync:')} {new Date(channel.lastPolledAt).toLocaleString()}
+                              {t('channel_office365.capability.calendar.disabled.hint', 'Enable to sync calendar events to Activities.')}
                             </p>
                           ) : null}
-                          {calCap?.syncFromDate && (
+                          {calendarEnabled && calCap?.syncFromDate && (
                             <p className="text-xs text-muted-foreground">
                               {t('channel_office365.syncFrom.label', 'Sync from:')} {new Date(calCap.syncFromDate).toLocaleDateString()}
                             </p>
                           )}
                         </div>
                         <div className="flex items-center gap-2 shrink-0 flex-wrap">
-                          <input
-                            type="date"
-                            value={calendarSyncFrom}
-                            onChange={(e) => setCalendarSyncFrom(e.target.value)}
-                            max={new Date().toISOString().slice(0, 10)}
-                            className="text-xs border rounded px-1.5 py-1 bg-background"
-                          />
+                          {calendarEnabled && (
+                            <>
+                              <input
+                                type="date"
+                                value={calendarSyncFrom}
+                                onChange={(e) => setCalendarSyncFrom(e.target.value)}
+                                max={new Date().toISOString().slice(0, 10)}
+                                className="text-xs border rounded px-1.5 py-1 bg-background"
+                              />
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => void handleSyncNow(channel.id, calendarSyncFrom)}
+                                disabled={!calendarSyncFrom || syncingId === channel.id}
+                                aria-label={t('channel_office365.resetSync.button', 'Sync calendar from selected date')}
+                              >
+                                <RefreshCw className={`size-3.5 mr-1 ${syncingId === channel.id ? 'animate-spin' : ''}`} />
+                                {syncingId === channel.id
+                                  ? t('channel_office365.sync.syncing', 'Syncing…')
+                                  : t('channel_office365.resetSync.button', 'Sync')}
+                              </Button>
+                            </>
+                          )}
                           <Button
                             size="sm"
-                            variant="outline"
-                            onClick={() => void handleSyncNow(channel.id, calendarSyncFrom)}
-                            disabled={!calendarSyncFrom || syncingId === channel.id}
-                            aria-label={t('channel_office365.resetSync.button', 'Sync calendar from selected date')}
+                            variant={calendarEnabled ? 'outline' : 'default'}
+                            onClick={() => void handleToggleCapability(channel.id, 'calendar', !calendarEnabled)}
+                            disabled={isToggling}
+                            aria-label={calendarEnabled
+                              ? t('channel_office365.capability.calendar.disable', 'Disable Calendar Sync')
+                              : t('channel_office365.capability.calendar.enable', 'Enable Calendar Sync')}
                           >
-                            <RefreshCw className={`size-3.5 mr-1 ${syncingId === channel.id ? 'animate-spin' : ''}`} />
-                            {syncingId === channel.id
-                              ? t('channel_office365.sync.syncing', 'Syncing…')
-                              : t('channel_office365.resetSync.button', 'Sync')}
+                            <Calendar className="size-3.5 mr-1" />
+                            {isToggling
+                              ? t('channel_office365.capability.calendar.updating', 'Updating…')
+                              : calendarEnabled
+                                ? t('channel_office365.capability.calendar.disable', 'Disable')
+                                : t('channel_office365.capability.calendar.enable', 'Enable')}
                           </Button>
                         </div>
                       </div>
@@ -586,6 +714,14 @@ export default function Office365Page() {
                           {mailCap?.syncFromDate && (
                             <p className="text-xs text-muted-foreground">
                               {t('channel_office365.syncFrom.label', 'Sync from:')} {new Date(mailCap.syncFromDate).toLocaleDateString()}
+                            </p>
+                          )}
+                          {mailEnabled && (
+                            <p className="text-xs text-muted-foreground">
+                              {t(
+                                'channel_office365.emailWindow.hint',
+                                'Po włączeniu synchronizują się maile z ostatniego 1 dnia. Aby pobrać starsze, wybierz datę obok i kliknij Sync.',
+                              )}
                             </p>
                           )}
                         </div>
@@ -706,28 +842,53 @@ export default function Office365Page() {
                       </div>
                     )}
 
-                    {/* Reset sync data — destroys O365-synced calendar/mail data, not CRM records */}
-                    <div className="flex items-center justify-between rounded-md border border-status-error-border/40 bg-status-error-bg/30 px-3 py-2">
-                      <div>
-                        <p className="text-xs font-medium text-status-error-text">
-                          {t('channel_office365.resetData.label', 'Wyczyść dane sync')}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {t('channel_office365.resetData.hint', 'Usuwa aktywności, e-maile i spotkania z M365. Nie usuwa osób, firm ani szans.')}
-                        </p>
+                    {/* Reset sync data — destroys O365-synced calendar/mail data, not CRM records.
+                        Scoped per kind so clearing emails no longer wipes meetings (and vice versa). */}
+                    <div className="rounded-md border border-status-error-border/40 bg-status-error-bg/30 px-3 py-2">
+                      <p className="text-xs font-medium text-status-error-text">
+                        {t('channel_office365.resetData.label', 'Wyczyść dane sync')}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {t('channel_office365.resetData.hint', 'Usuwa zsynchronizowane dane z M365. Nie usuwa osób, firm ani szans.')}
+                      </p>
+                      <div className="flex items-center gap-2 mt-2 flex-wrap">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void handleResetSyncData(channel.id, 'calendar')}
+                          disabled={resettingId === `${channel.id}:calendar`}
+                          aria-label={t('channel_office365.resetData.calendar', 'Wyczyść spotkania')}
+                        >
+                          <Trash2 className="size-3.5 mr-1" />
+                          {resettingId === `${channel.id}:calendar`
+                            ? t('channel_office365.resetData.clearing', 'Czyszczenie…')
+                            : t('channel_office365.resetData.calendar', 'Wyczyść spotkania')}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void handleResetSyncData(channel.id, 'mail')}
+                          disabled={resettingId === `${channel.id}:mail`}
+                          aria-label={t('channel_office365.resetData.mail', 'Wyczyść e-maile')}
+                        >
+                          <Trash2 className="size-3.5 mr-1" />
+                          {resettingId === `${channel.id}:mail`
+                            ? t('channel_office365.resetData.clearing', 'Czyszczenie…')
+                            : t('channel_office365.resetData.mail', 'Wyczyść e-maile')}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => void handleResetSyncData(channel.id, 'all')}
+                          disabled={resettingId === `${channel.id}:all`}
+                          aria-label={t('channel_office365.resetData.label', 'Wyczyść dane sync')}
+                        >
+                          <Trash2 className="size-3.5 mr-1" />
+                          {resettingId === `${channel.id}:all`
+                            ? t('channel_office365.resetData.clearing', 'Czyszczenie…')
+                            : t('channel_office365.resetData.all', 'Wyczyść wszystko')}
+                        </Button>
                       </div>
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        onClick={() => void handleResetSyncData(channel.id)}
-                        disabled={resettingId === channel.id}
-                        aria-label={t('channel_office365.resetData.label', 'Wyczyść dane sync')}
-                      >
-                        <Trash2 className="size-3.5 mr-1" />
-                        {resettingId === channel.id
-                          ? t('channel_office365.resetData.clearing', 'Czyszczenie…')
-                          : t('channel_office365.resetData.label', 'Wyczyść dane sync')}
-                      </Button>
                     </div>
 
                     {/* Mail scope hint — shown when Mail.ReadWrite not yet granted */}

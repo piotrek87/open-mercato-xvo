@@ -30,7 +30,10 @@ type SubscriberContext = {
 
 export const metadata = {
   event: 'communication_channels.message.received',
-  persistent: true,
+  // persistent: false = runs synchronously in-process when the event fires,
+  // without going through the events queue. This gives us a chance to set
+  // external_email_sent_at BEFORE the messages-email queue worker picks up the job.
+  persistent: false,
   id: 'channel_office365:suppress-inbound-email-send',
 }
 

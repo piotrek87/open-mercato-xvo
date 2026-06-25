@@ -55,7 +55,7 @@ export default async function handler(
     `SELECT id, participants FROM activities
      WHERE tenant_id = ? AND organization_id = ? AND deleted_at IS NULL
      AND participants IS NOT NULL
-     AND participants @> ?::jsonb`,
+     AND participants @> CAST(? AS jsonb)`,
     [tenantId, organizationId, JSON.stringify([{ email }])],
   )
 

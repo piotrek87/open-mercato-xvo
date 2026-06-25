@@ -29,25 +29,31 @@ import type {
   InboundMessage,
   MessageStatus,
   NormalizedInboundMessage,
-  RefreshCredentialsInput,
-  RefreshedCredentials,
   ResolveContactInput,
   SendMessageInput,
   SendMessageResult,
   VerifyWebhookInput,
 } from '@open-mercato/core/modules/communication_channels/lib/adapter'
 import { o365UserCredentialsSchema, O365_MAIL_PROVIDER_KEY } from './credentials'
-import { getMsOAuthClient, tokenResponseToExpiresAt } from './oauth'
-import { o365ClientCredentialsSchema } from './credentials'
 import { GraphApiError } from './graph-client'
 
 // ── Constants ─────────────────────────────────────────────────
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0'
 const DEFAULT_TIMEOUT_MS = 30_000
-const MAIL_BOOTSTRAP_DAYS = 7
 const MAIL_MAX_PAGES = 100
 const IMPORT_HISTORY_DEFAULT_DAYS = 30
+
+// Well-known folders to EXCLUDE from the mailbox-wide scan. We sync the whole mailbox
+// (Inbox + Sent + Archive + every user-created subfolder, since incoming mail is often
+// filed by rules into subfolders) but skip system folders that are not real correspondence.
+const EXCLUDED_WELL_KNOWN_FOLDERS = [
+  'drafts',
+  'deleteditems',
+  'junkemail',
+  'outbox',
+  'conversationhistory',
+] as const
 
 // ── Graph mail types (full body, not bodyPreview) ─────────────
 
@@ -80,6 +86,7 @@ interface GraphMailMessageFull {
   isDraft?: boolean | null
   hasAttachments?: boolean | null
   internetMessageId?: string | null
+  parentFolderId?: string | null
   '@removed'?: { reason: string } | null
 }
 
@@ -98,14 +105,15 @@ const MAIL_SELECT_FULL = [
   'isDraft',
   'hasAttachments',
   'internetMessageId',
+  'parentFolderId',
 ].join(',')
 
 // ── Cursor state (JSON-encoded in HistoryPage.nextCursor) ──────
 
 interface MailCursorState {
-  inbox?: { deltaToken?: string }
-  sentItems?: { deltaToken?: string }
-  /** ISO timestamp — used as since-cutoff on bootstrap (no delta token). Set at channel provisioning. */
+  /** Watermark: highest receivedDateTime ingested so far (ISO). Incremental scans start here. */
+  lastReceivedDateTime?: string
+  /** ISO since-cutoff for the FIRST (bootstrap) scan. Set at provisioning (now − 7 days). */
   syncFromDate?: string
 }
 
@@ -197,58 +205,106 @@ async function graphMailPost(
   }
 }
 
-// ── Delta drain ───────────────────────────────────────────────
+// ── Mailbox-wide scan ─────────────────────────────────────────
 
-async function drainMailDeltaFull(
+/**
+ * Resolve the mailbox owner's email (lowercased) so we can label each message's direction
+ * (sender === owner → outbound, else inbound). Folder no longer determines direction now that
+ * we scan the whole mailbox (a custom subfolder may hold both received and sent mail).
+ */
+async function fetchMailboxOwnerEmail(accessToken: string): Promise<string | null> {
+  try {
+    const r = (await graphMailFetch(`${GRAPH_BASE}/me?$select=mail,userPrincipalName`, accessToken)) as {
+      mail?: string | null
+      userPrincipalName?: string | null
+    }
+    const email = r.mail ?? r.userPrincipalName ?? null
+    return email ? email.toLowerCase() : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Resolve the folder IDs of the excluded well-known folders. `/me/messages` returns mail from
+ * every folder (including Drafts/Deleted Items/Junk), so we filter those out by parentFolderId.
+ * Folders that don't exist in a mailbox (e.g. conversationhistory) just 404 and are skipped.
+ */
+async function fetchExcludedFolderIds(accessToken: string): Promise<Set<string>> {
+  const ids = new Set<string>()
+  await Promise.all(
+    EXCLUDED_WELL_KNOWN_FOLDERS.map(async (name) => {
+      try {
+        const r = (await graphMailFetch(`${GRAPH_BASE}/me/mailFolders/${name}?$select=id`, accessToken)) as { id?: string }
+        if (r?.id) ids.add(r.id)
+      } catch {
+        /* folder not present in this mailbox — ignore */
+      }
+    }),
+  )
+  return ids
+}
+
+/**
+ * Drain ALL mailbox messages with receivedDateTime >= sinceCutoff, across every folder, skipping
+ * messages that live in an excluded system folder. Returns the messages plus the highest
+ * receivedDateTime seen (the incremental watermark for the next scan).
+ *
+ * Uses `/me/messages` (mailbox-wide) rather than per-folder delta: delta is only available
+ * per mailFolder, but incoming mail is routinely filed by rules into user subfolders, so a
+ * two-folder (Inbox + Sent) delta misses most received correspondence. Exchange stamps a
+ * receivedDateTime on sent items too, so this single filter bounds both directions.
+ */
+async function drainMailboxMessagesSince(
   accessToken: string,
-  folder: 'inbox' | 'sentItems',
-  deltaToken?: string,
-  sinceCutoff?: Date,
-): Promise<{ messages: GraphMailMessageFull[]; nextDeltaToken?: string }> {
+  sinceCutoff: Date,
+  excludedFolderIds: Set<string>,
+): Promise<{ messages: GraphMailMessageFull[]; maxReceivedDateTime?: string }> {
   const messages: GraphMailMessageFull[] = []
-  let nextDeltaToken: string | undefined
-  let currentToken = deltaToken
+  let maxReceivedDateTime: string | undefined
+  const sinceIso = sinceCutoff.toISOString().replace(/\.\d{3}Z$/, 'Z')
+
+  let url: string | undefined =
+    `${GRAPH_BASE}/me/messages?$filter=receivedDateTime ge ${sinceIso}&$select=${MAIL_SELECT_FULL}`
   let maxPages = MAIL_MAX_PAGES
 
-  while (maxPages-- > 0) {
-    let url: string
-    if (currentToken) {
-      url = currentToken
-    } else {
-      const folderPath = folder === 'inbox' ? 'inbox' : 'sentItems'
-      if (folder === 'inbox') {
-        const since = sinceCutoff ?? new Date(Date.now() - MAIL_BOOTSTRAP_DAYS * 24 * 60 * 60 * 1000)
-        const sinceIso = since.toISOString().replace(/\.\d{3}Z$/, 'Z')
-        url = `${GRAPH_BASE}/me/mailFolders/${folderPath}/messages/delta?$filter=receivedDateTime ge ${sinceIso}&$select=${MAIL_SELECT_FULL}`
-      } else {
-        // sentItems: receivedDateTime filter not supported — no date filter
-        url = `${GRAPH_BASE}/me/mailFolders/${folderPath}/messages/delta?$select=${MAIL_SELECT_FULL}`
-      }
-    }
-
+  while (url && maxPages-- > 0) {
     const raw = (await graphMailFetch(url, accessToken)) as {
       value?: GraphMailMessageFull[]
       '@odata.nextLink'?: string
-      '@odata.deltaLink'?: string
     }
 
-    messages.push(...(raw.value ?? []))
+    for (const m of raw.value ?? []) {
+      if (m.parentFolderId && excludedFolderIds.has(m.parentFolderId)) continue
+      messages.push(m)
+      // ISO-8601 timestamps compare lexicographically — safe to track the max as a string.
+      if (m.receivedDateTime && (!maxReceivedDateTime || m.receivedDateTime > maxReceivedDateTime)) {
+        maxReceivedDateTime = m.receivedDateTime
+      }
+    }
 
-    if (raw['@odata.deltaLink']) {
-      nextDeltaToken = raw['@odata.deltaLink']
-      break
-    }
-    if (raw['@odata.nextLink']) {
-      currentToken = raw['@odata.nextLink']
-    } else {
-      break
-    }
+    url = raw['@odata.nextLink']
   }
 
-  return { messages, nextDeltaToken }
+  return { messages, maxReceivedDateTime }
 }
 
 // ── HTML → plain-text helper ──────────────────────────────────
+
+function escapeHtmlEntities(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+function plainTextToHtml(text: string): string {
+  // Wrap plain-text email content in <pre> so renderers treat it as HTML
+  // rather than passing it through a markdown/MDX parser.
+  // Escaping < and > prevents "<user@domain.com>" from being parsed as JSX tags.
+  return `<pre style="white-space:pre-wrap;word-wrap:break-word;font-family:inherit;margin:0">${escapeHtmlEntities(text)}</pre>`
+}
 
 function htmlToPlainText(html: string): string {
   return html
@@ -314,12 +370,13 @@ function normalizeGraphMessage(
       hasAttachments: msg.hasAttachments ?? false,
       direction,
       receivedAt: timestamp.toISOString(),
-      // Include body content so ChannelPayloadRendererWidget can render the email body.
-      // The widget checks channelPayload.html (for email/html) or channelPayload.text.
-      // text is always included: EmailThreadsPanel uses it as the plain-text body display.
+      // Always include both html and text so ChannelPayloadRendererWidget uses html.
+      // For plain-text emails, wrap in <pre> with HTML-escaped content so the renderer
+      // never passes raw text through the MDX parser (which chokes on <user@domain.com>
+      // angle-bracket email addresses, treating them as JSX member expressions).
       ...(bodyFormat === 'html'
         ? { html: bodyContent, text: htmlToPlainText(bodyContent) }
-        : { text: bodyContent }),
+        : { html: plainTextToHtml(bodyContent), text: bodyContent }),
     },
     channelContentType: `email/${bodyFormat}`,
     channelMetadata: {
@@ -332,9 +389,13 @@ function normalizeGraphMessage(
 }
 
 function parseCursorState(channelState: Record<string, unknown>): MailCursorState {
+  // Back-compat: channels persisted before the mailbox-wide rewrite carried { inbox, sentItems }
+  // delta tokens. Those keys are ignored now — with no lastReceivedDateTime the next scan simply
+  // re-bootstraps from syncFromDate, which is harmless (re-ingested rows dedupe on externalMessageId).
   return {
-    inbox: (channelState.inbox as MailCursorState['inbox']) ?? undefined,
-    sentItems: (channelState.sentItems as MailCursorState['sentItems']) ?? undefined,
+    lastReceivedDateTime:
+      typeof channelState.lastReceivedDateTime === 'string' ? channelState.lastReceivedDateTime : undefined,
+    syncFromDate: typeof channelState.syncFromDate === 'string' ? channelState.syncFromDate : undefined,
   }
 }
 
@@ -380,40 +441,48 @@ class O365EmailChannelAdapter implements ChannelAdapter {
   async fetchHistory(input: FetchHistoryInput): Promise<HistoryPage> {
     const creds = o365UserCredentialsSchema.parse(input.credentials)
 
-    // Hub replays HistoryPage.nextCursor as channelState (parsed from JSON).
-    // channelState holds separate deltaLinks for inbox and sentItems plus syncFromDate.
+    // Hub replays HistoryPage.nextCursor as channelState (base64-decoded JSON).
     const cs = parseCursorState(input.channelState ?? {})
-    const inboxDelta = cs.inbox?.deltaToken
-    const sentItemsDelta = cs.sentItems?.deltaToken
 
-    // Use syncFromDate (set at provisioning = channel connection date) as the since-cutoff
-    // when bootstrapping inbox with no delta token. Default to now so we never pull history
-    // unless the user explicitly configured a past date in channel settings.
-    const syncFromDate = cs.syncFromDate ? new Date(cs.syncFromDate) : new Date()
+    // Incremental scans resume from the highest receivedDateTime ingested so far. The first
+    // (bootstrap) scan starts at syncFromDate (set at provisioning = now − 7 days); default to
+    // now so we never pull history unless a window was configured.
+    const sinceIso = cs.lastReceivedDateTime ?? cs.syncFromDate
+    const since = sinceIso ? new Date(sinceIso) : new Date()
 
-    // Drain both folders in parallel — independent delta streams
-    const [inboxResult, sentResult] = await Promise.all([
-      drainMailDeltaFull(creds.accessToken, 'inbox', inboxDelta, inboxDelta ? undefined : syncFromDate),
-      drainMailDeltaFull(creds.accessToken, 'sentItems', sentItemsDelta),
+    const [ownerEmail, excludedFolderIds] = await Promise.all([
+      fetchMailboxOwnerEmail(creds.accessToken),
+      fetchExcludedFolderIds(creds.accessToken),
     ])
 
-    const inboxMessages = inboxResult.messages
-      .filter(m => !m['@removed'] && !m.isDraft)
-      .map(m => normalizeGraphMessage(m, 'inbound'))
+    const { messages: raw, maxReceivedDateTime } = await drainMailboxMessagesSince(
+      creds.accessToken,
+      since,
+      excludedFolderIds,
+    )
 
-    const sentMessages = sentResult.messages
+    const messages = raw
       .filter(m => !m['@removed'] && !m.isDraft)
-      .map(m => normalizeGraphMessage(m, 'outbound'))
+      .map(m => {
+        const from = m.from?.emailAddress?.address?.toLowerCase() ?? ''
+        const direction: 'inbound' | 'outbound' = ownerEmail && from === ownerEmail ? 'outbound' : 'inbound'
+        return normalizeGraphMessage(m, direction)
+      })
 
     const newState: MailCursorState = {
-      inbox: { deltaToken: inboxResult.nextDeltaToken ?? inboxDelta },
-      sentItems: { deltaToken: sentResult.nextDeltaToken ?? sentItemsDelta },
-      syncFromDate: cs.syncFromDate,  // preserve for future syncs
+      // Advance the watermark; keep the previous one when this scan returned nothing new.
+      lastReceivedDateTime: maxReceivedDateTime ?? cs.lastReceivedDateTime ?? cs.syncFromDate,
+      syncFromDate: cs.syncFromDate,
     }
 
     return {
-      messages: [...inboxMessages, ...sentMessages],
-      nextCursor: JSON.stringify(newState),
+      messages,
+      // The hub poll-channel worker persists nextCursor into channelState via
+      // decodeChannelStateCursor() = JSON.parse(Buffer.from(cursor, 'base64')). It expects
+      // base64-encoded JSON (same contract as the Gmail history adapter). Returning raw JSON
+      // here makes the base64 decode produce garbage → JSON.parse throws → the cursor is
+      // silently dropped and every poll re-bootstraps from syncFromDate. Encode to base64.
+      nextCursor: Buffer.from(JSON.stringify(newState)).toString('base64'),
       hasMore: false,
     }
   }
@@ -423,36 +492,24 @@ class O365EmailChannelAdapter implements ChannelAdapter {
     const sinceDays = Math.min(input.sinceDays, 365)
     const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000)
 
-    // Parse resumption cursor from a previous importHistory page
-    let inboxCursor: string | undefined
-    let sentCursor: string | undefined
-    if (input.cursor) {
-      try {
-        const parsed = JSON.parse(input.cursor) as { inbox?: string; sentItems?: string }
-        inboxCursor = parsed.inbox
-        sentCursor = parsed.sentItems
-      } catch { /* ignore — first page */ }
-    }
-
-    const [inboxResult, sentResult] = await Promise.all([
-      drainMailDeltaFull(creds.accessToken, 'inbox', inboxCursor, since),
-      drainMailDeltaFull(creds.accessToken, 'sentItems', sentCursor),
+    const [ownerEmail, excludedFolderIds] = await Promise.all([
+      fetchMailboxOwnerEmail(creds.accessToken),
+      fetchExcludedFolderIds(creds.accessToken),
     ])
 
-    const messages = [
-      ...inboxResult.messages.filter(m => !m['@removed'] && !m.isDraft).map(m => normalizeGraphMessage(m, 'inbound')),
-      ...sentResult.messages.filter(m => !m['@removed'] && !m.isDraft).map(m => normalizeGraphMessage(m, 'outbound')),
-    ]
+    // Mailbox-wide drain in one shot (bounded by MAIL_MAX_PAGES). The import worker stops when
+    // hasMore is false; the regular poll then keeps the channel current from the watermark.
+    const { messages: raw } = await drainMailboxMessagesSince(creds.accessToken, since, excludedFolderIds)
 
-    const hasMore = !!(inboxResult.nextDeltaToken || sentResult.nextDeltaToken)
-    const nextCursor = hasMore
-      ? JSON.stringify({
-          inbox: inboxResult.nextDeltaToken,
-          sentItems: sentResult.nextDeltaToken,
-        })
-      : undefined
+    const messages = raw
+      .filter(m => !m['@removed'] && !m.isDraft)
+      .map(m => {
+        const from = m.from?.emailAddress?.address?.toLowerCase() ?? ''
+        const direction: 'inbound' | 'outbound' = ownerEmail && from === ownerEmail ? 'outbound' : 'inbound'
+        return normalizeGraphMessage(m, direction)
+      })
 
-    return { messages, nextCursor, hasMore }
+    return { messages, nextCursor: undefined, hasMore: false }
   }
 
   // ── Send ────────────────────────────────────────────────────
@@ -515,36 +572,11 @@ class O365EmailChannelAdapter implements ChannelAdapter {
     }
   }
 
-  // ── Credential refresh ─────────────────────────────────────────
-
-  async refreshCredentials(input: RefreshCredentialsInput): Promise<RefreshedCredentials> {
-    const current = o365UserCredentialsSchema.parse(input.credentials)
-    if (!current.refreshToken) {
-      throw new Error('requires_reauth')
-    }
-    const oauthClient = input.oauthClient
-    if (!oauthClient?.clientId || !oauthClient?.clientSecret) {
-      throw new Error('[internal] O365 OAuth client credentials (clientId/clientSecret) required for refresh')
-    }
-    const clientParsed = o365ClientCredentialsSchema.safeParse(oauthClient)
-    const token = await getMsOAuthClient().refreshToken({
-      clientId: oauthClient.clientId,
-      clientSecret: oauthClient.clientSecret,
-      refreshToken: current.refreshToken,
-      tenantId: clientParsed.success ? clientParsed.data.tenantId : undefined,
-    })
-    const expiresAt = tokenResponseToExpiresAt(token)
-    return {
-      credentials: {
-        ...current,
-        accessToken: token.access_token,
-        refreshToken: token.refresh_token ?? current.refreshToken,
-        expiresAt: expiresAt?.toISOString(),
-      },
-      expiresAt: expiresAt ?? undefined,
-    }
-  }
 }
+// refreshCredentials intentionally omitted: the email channel delegates token refresh
+// to the calendar channel (office365). Credentials are always resolved via bundleId
+// fallback (channel_office365_mail → channel_office365), so the calendar channel's
+// refresh cycle keeps both channels current without a rotating-refresh-token race.
 
 // ── Factory ───────────────────────────────────────────────────
 

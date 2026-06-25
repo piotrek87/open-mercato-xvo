@@ -277,7 +277,7 @@ export async function GET(req: Request) {
     const em = (container.resolve('em') as EntityManager).fork()
     const db = em.getKysely<any>() as any
 
-    const requestedSortField = query.sortField ?? 'scheduledAt'
+    const requestedSortField = query.sortField ?? 'occurredAt'
     const sortConfig = interactionSortConfig[requestedSortField]
     const sortDir = query.sortDir ?? sortConfig.defaultDir
     const sortSql = buildSortSql(requestedSortField, sortDir)
@@ -362,6 +362,16 @@ export async function GET(req: Request) {
       rowsQuery = rowsQuery.where('pinned', '=', false)
     }
     if (query.excludeInteractionType) rowsQuery = rowsQuery.where('interaction_type', '!=', query.excludeInteractionType)
+    // De-duplicate O365 emails in this unified timeline. Each synced O365 email produces TWO
+    // CustomerInteraction rows: our source-based one (external_message_id IS NULL, real
+    // receivedAt, plaintext body, activity-linked) which belongs in this timeline, AND core's
+    // external-message-based one (external_message_id = MessageChannelLink.id) which powers the
+    // threaded "E-maile" tab via its own endpoint. Hide the latter here so each O365 email shows
+    // once. Scoped to office365_mail by channel_provider_key — other channels (e.g. Gmail) have a
+    // single CI and are untouched.
+    rowsQuery = rowsQuery.where(
+      sql<boolean>`(channel_provider_key is distinct from 'office365_mail' or external_message_id is null)`,
+    )
     if (query.search) {
       const searchTerm = `%${escapeLikePattern(query.search)}%`
       rowsQuery = rowsQuery.where(sql<boolean>`coalesce(title, '') ilike ${searchTerm} or coalesce(body, '') ilike ${searchTerm}`)
@@ -566,6 +576,12 @@ export async function getInteractionCounts(req: Request) {
     if (query.status) {
       baseQuery = baseQuery.where('status', '=', query.status)
     }
+
+    // Same O365 email de-duplication as the list (see GET): count each O365 email once by
+    // excluding core's external-message-based CI (the E-maile-tab row) from this timeline count.
+    baseQuery = baseQuery.where(
+      sql<boolean>`(channel_provider_key is distinct from 'office365_mail' or external_message_id is null)`,
+    )
 
     const viewerUserId = auth.isApiKey ? null : auth.sub ?? null
     baseQuery = applyEmailVisibilityFilter(baseQuery, {

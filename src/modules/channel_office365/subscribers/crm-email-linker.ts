@@ -99,6 +99,8 @@ export default async function handler(
     subject?: string | null
     direction?: string
     receivedAt?: string | null
+    text?: string | null
+    html?: string | null
   }
 
   // Collect participant email addresses and deduplicate
@@ -167,19 +169,35 @@ export default async function handler(
   // Stable dedup key: ExternalMessage UUID (one per unique external message)
   const source = `office365:mail:${payload.externalMessageId}`
   const title = cp.subject ?? null
+  // Plain-text email body — graph-mail-adapter derives `text` from the HTML with line breaks
+  // preserved. Stored on the Activity (notes) and CustomerInteraction (body) so the detail page
+  // and CRM interaction history show the message content, not just the subject. Capped for safety.
+  const rawBody = typeof cp.text === 'string' ? cp.text.trim() : ''
+  const bodyText = rawBody ? rawBody.slice(0, 20000) : null
   const ciStatus = occurredAt && occurredAt <= now ? 'done' : 'planned'
 
-  // Build participants JSON for display in UI
-  const participantsList: Array<{ email: string; name?: string }> = []
+  // Build participants JSON for display in UI.
+  // status values must match what the Activities detail page expects:
+  // 'sender' → from, 'recipient' → to, 'cc' → cc, 'bcc' → bcc
+  const participantsList: Array<{ email: string; name?: string; status: string }> = []
   if (cp.from) {
-    const entry: { email: string; name?: string } = { email: cp.from }
+    const entry: { email: string; name?: string; status: string } = {
+      email: cp.from,
+      status: 'sender',
+    }
     if (cp.fromName) entry.name = cp.fromName
     participantsList.push(entry)
   }
-  for (const email of [...(cp.to ?? []), ...(cp.cc ?? [])]) {
+  for (const email of (cp.to ?? [])) {
     const lower = email.toLowerCase()
     if (!participantsList.some(p => p.email.toLowerCase() === lower)) {
-      participantsList.push({ email })
+      participantsList.push({ email, status: 'recipient' })
+    }
+  }
+  for (const email of (cp.cc ?? [])) {
+    const lower = email.toLowerCase()
+    if (!participantsList.some(p => p.email.toLowerCase() === lower)) {
+      participantsList.push({ email, status: 'cc' })
     }
   }
   const participantsJson = participantsList.length > 0 ? JSON.stringify(participantsList) : null
@@ -193,7 +211,7 @@ export default async function handler(
       personId,
       'email',
       title,
-      null,             // body
+      bodyText,         // body
       occurredAt,
       null,             // author_user_id
       null,             // owner_user_id
@@ -253,7 +271,7 @@ export default async function handler(
         row.company_id,
         'email',
         title,
-        null,
+        bodyText,
         occurredAt,
         null,
         null,
@@ -313,7 +331,7 @@ export default async function handler(
           'email',
           'fact',
           title ?? '(no subject)',
-          null,             // notes
+          bodyText,         // notes
           'fact',           // status for fact lifecycle
           occurredAt,
           'team',

@@ -25,6 +25,12 @@ export async function GET(request: Request): Promise<Response> {
   if (!auth?.sub || !auth?.tenantId) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+  // O365 is a per-user connection but channels are stored per organization. This route is
+  // intentionally NOT org-scoped (no organizationId filter below) so the settings page can
+  // show the user's connections across ALL their organizations. Each org syncs independently
+  // — the user connects once per organization. We expose the session org + a per-channel
+  // isCurrentOrg flag so the page can tell "connected here" from "connected elsewhere".
+  const sessionOrgId = (auth as { orgId?: string | null }).orgId ?? null
 
   const container = await createRequestContainer()
   const em = (container.resolve('em') as EntityManager).fork()
@@ -45,7 +51,7 @@ export async function GET(request: Request): Promise<Response> {
     const state = parsed.success ? parsed.data : {}
     let grantedScopes = state.grantedScopes ?? []
     const capabilities = state.capabilities ?? {
-      calendar: { enabled: true },
+      calendar: { enabled: false },
       mail: { enabled: false },
     }
 
@@ -72,10 +78,15 @@ export async function GET(request: Request): Promise<Response> {
       id: channel.id,
       grantedScopes,
       capabilities,
+      organizationId: channel.organizationId ?? null,
+      isCurrentOrg: (channel.organizationId ?? null) === sessionOrgId,
+      status: channel.status,
+      displayName: channel.displayName,
+      externalIdentifier: channel.externalIdentifier ?? null,
     }
   }))
 
-  return NextResponse.json({ items })
+  return NextResponse.json({ items, currentOrgId: sessionOrgId })
 }
 
 const capabilityStateSchema = z.object({
@@ -103,7 +114,13 @@ export const openApi: OpenApiRouteDoc = {
                 calendar: capabilityStateSchema.optional(),
                 mail: capabilityStateSchema.optional(),
               }),
+              organizationId: z.string().uuid().nullable(),
+              isCurrentOrg: z.boolean(),
+              status: z.string(),
+              displayName: z.string(),
+              externalIdentifier: z.string().nullable(),
             })),
+            currentOrgId: z.string().uuid().nullable(),
           }),
         },
         { status: 401, description: 'Unauthorized' },

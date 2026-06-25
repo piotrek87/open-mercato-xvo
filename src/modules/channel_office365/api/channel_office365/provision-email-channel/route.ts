@@ -4,7 +4,6 @@ import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
-import { IntegrationCredentials } from '@open-mercato/core/modules/integrations/data/entities'
 import { provisionEmailChannel } from '../../../lib/email-channel-provisioner'
 
 export const metadata = {
@@ -59,46 +58,12 @@ export async function POST(request: Request): Promise<Response> {
     )
   }
 
-  // The hub's channel-import-history (and poll) worker derives integrationId as
-  // `channel_${channel.providerKey}`, so for the email channel it looks for
-  // 'channel_office365_mail'. OAuth credentials were saved under 'channel_office365'
-  // (the calendar OAuth flow). Copy the encrypted blob under the email key so the
-  // worker can resolve credentials. The blob is encrypted with the tenant DEK, so
-  // copying it as-is is safe — same tenant, same key.
-  if (scope.organizationId) {
-    try {
-      const calendarCred = await em.findOne(IntegrationCredentials, {
-        integrationId: 'channel_office365',
-        tenantId: scope.tenantId,
-        organizationId: scope.organizationId,
-        userId: auth.sub as string,
-        deletedAt: null,
-      })
-      if (calendarCred) {
-        const emailCred = await em.findOne(IntegrationCredentials, {
-          integrationId: 'channel_office365_mail',
-          tenantId: scope.tenantId,
-          organizationId: scope.organizationId,
-          userId: auth.sub as string,
-          deletedAt: null,
-        })
-        if (emailCred) {
-          emailCred.credentials = calendarCred.credentials
-        } else {
-          em.persist(em.create(IntegrationCredentials, {
-            integrationId: 'channel_office365_mail',
-            tenantId: scope.tenantId,
-            organizationId: scope.organizationId,
-            userId: auth.sub as string,
-            credentials: calendarCred.credentials,
-          }))
-        }
-        await em.flush()
-      }
-    } catch (err) {
-      console.warn('[channel_office365] credentials copy to channel_office365_mail failed:', err instanceof Error ? err.message : err)
-    }
-  }
+  // NOTE: we intentionally do NOT delete the channel_office365_mail credential row here anymore.
+  // The calendar-sync worker mirrors the freshly-refreshed OAuth token into the
+  // channel_office365_mail integration scope on every run, so the hub mail poll resolves a
+  // DIRECT, always-fresh credential row (no reliance on the bundleId fallback, which needs the
+  // integration registry loaded in the poll-channel worker process — not guaranteed). Deleting
+  // the row here would race with that mirror and reintroduce the "accessToken undefined" error.
 
   return NextResponse.json({
     channelId: result.channelId,

@@ -56,8 +56,11 @@ export default function ActivityStatsPage() {
     queryKey: ['activities-stats', preset],
     queryFn: async () => {
       const params = new URLSearchParams({ from: range.from, to: range.to })
-      const res = await apiCall(`/api/activities/stats?${params}`)
-      return (res as unknown as { data: StatsData }).data
+      // apiCall returns { ok, status, result } — the stats payload is in res.result.data,
+      // NOT res.data. Reading res.data was always undefined → "Failed to load stats" on a 200.
+      const res = await apiCall<{ data?: StatsData; error?: string }>(`/api/activities/stats?${params}`)
+      if (!res.ok || !res.result?.data) throw new Error(res.result?.error ?? 'Failed to load stats')
+      return res.result.data
     },
   })
 

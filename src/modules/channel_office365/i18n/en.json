@@ -31,6 +31,10 @@
   "channel_office365.setup.scopes": "Required API permissions: Calendars.ReadWrite, Mail.ReadWrite, User.Read, offline_access.",
   "channel_office365.setup.redirectUri": "Redirect URI: <yourdomain>/api/communication_channels/oauth/office365/callback",
   "channel_office365.capability.calendar.label": "Calendar Sync",
+  "channel_office365.capability.calendar.enable": "Enable",
+  "channel_office365.capability.calendar.disable": "Disable",
+  "channel_office365.capability.calendar.updating": "Updating…",
+  "channel_office365.capability.calendar.disabled.hint": "Enable to sync calendar events to Activities.",
   "channel_office365.capability.mail.label": "Email Sync",
   "channel_office365.errors.unauthorized": "Unauthorized",
   "channel_office365.errors.channelNotFound": "Channel not found",
@@ -51,6 +55,7 @@
   "channel_office365.mailSync.error": "Failed to start email sync",
   "channel_office365.mailSync.syncing": "Syncing…",
   "channel_office365.syncFrom.label": "Sync from:",
+  "channel_office365.emailWindow.hint": "Enabling syncs the last 1 day of mail. To fetch older messages, pick a date and click Sync.",
   "channel_office365.resetSync.from": "Reset & sync from:",
-  "channel_office365.resetSync.button": "Reset & sync"
+  "channel_office365.resetSync.button": "Sync"
 }

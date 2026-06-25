@@ -59,9 +59,20 @@ export async function POST(req: Request): Promise<Response> {
         }),
       ])
 
-      // Redirect to M365 settings only when there is a genuinely active + connected channel.
-      const activeConnected = calendarChannels.find(
-        (c) => c.isActive && c.status === 'connected',
+      // Redirect to M365 settings ONLY when there is a genuinely active + connected channel
+      // IN THE CURRENT SESSION ORGANIZATION, and the request is NOT from the settings page
+      // itself. Two guards prevent the "Connect does nothing" redirect loop:
+      //  1. org-scoping — me/channels (what the settings page renders) filters by the session
+      //     org. A connected channel in a DIFFERENT org must NOT short-circuit OAuth here,
+      //     otherwise the page shows "not connected" while we keep redirecting back to it,
+      //     and the user can never reach Microsoft to (re)connect in their current org.
+      //  2. referer — when the user clicks Connect/Reconnect ON the settings page, always run
+      //     a real OAuth flow regardless of any existing channel.
+      const sessionOrgId = (auth as { orgId?: string | null }).orgId ?? null
+      const referer = req.headers.get('referer') ?? ''
+      const fromM365Settings = referer.includes('/backend/profile/microsoft-365')
+      const activeConnected = !fromM365Settings && calendarChannels.find(
+        (c) => c.isActive && c.status === 'connected' && (c.organizationId ?? null) === sessionOrgId,
       )
       if (activeConnected) {
         return NextResponse.json({ authorizeUrl: `${origin}/backend/profile/microsoft-365` })

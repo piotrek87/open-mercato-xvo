@@ -143,7 +143,7 @@ export default function ActivitiesListPage() {
         cell: ({ row, getValue }) => {
           const subject = String(getValue() ?? '').trim() || t('activities.list.subject.empty', '(no title)')
           return (
-            <TruncatedCell maxWidth="max-w-[320px]">
+            <TruncatedCell maxWidth="max-w-[600px]">
               <Link
                 href={`/backend/activities/${row.original.id}`}
                 className="text-sm hover:underline underline-offset-2"
