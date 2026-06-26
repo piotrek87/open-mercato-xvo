@@ -80,6 +80,29 @@ export const metadata = {
   id: 'channel_office365.email-attachment-fetcher',
 }
 
+/**
+ * Resolve a Graph immutable message id from an RFC 5322 internetMessageId (the `<...@...>` form
+ * stored in channelMetadata.messageId). Used as a fallback for links synced before graphId was
+ * persisted. Returns null when the message can't be found or the lookup fails.
+ */
+async function resolveGraphIdByInternetMessageId(
+  accessToken: string,
+  internetMessageId: string,
+): Promise<string | null> {
+  const filter = encodeURIComponent(`internetMessageId eq '${internetMessageId.replace(/'/g, "''")}'`)
+  try {
+    const res = await fetch(
+      `${GRAPH_BASE}/me/messages?$filter=${filter}&$select=id&$top=1`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    )
+    if (!res.ok) return null
+    const data = (await res.json()) as { value?: Array<{ id?: string }> }
+    return data.value?.[0]?.id ?? null
+  } catch {
+    return null
+  }
+}
+
 export default async function handler(
   payload: MessageReceivedPayload,
   ctx: SubscriberContext,
@@ -150,9 +173,15 @@ export default async function handler(
   }
   const accessToken = parsedCreds.data.accessToken
 
-  // Get the O365 Graph message ID from channelMetadata
-  const meta = link.channelMetadata as { messageId?: string } | null
-  const graphMessageId = meta?.messageId
+  // Resolve the Graph immutable message id. `channelMetadata.graphId` carries it for messages
+  // synced after the graphId fix; `channelMetadata.messageId` is the RFC 5322 Message-ID (used
+  // for thread dedup) which Graph rejects as malformed on /messages/{id}/attachments. For older
+  // links that only have messageId, resolve the Graph id via an internetMessageId filter.
+  const meta = link.channelMetadata as { messageId?: string; graphId?: string } | null
+  let graphMessageId = meta?.graphId ?? null
+  if (!graphMessageId && meta?.messageId) {
+    graphMessageId = await resolveGraphIdByInternetMessageId(accessToken, meta.messageId)
+  }
   if (!graphMessageId) {
     console.warn(`[channel_office365:email-attachment-fetcher] no graphMessageId for link ${link.id}`)
     return

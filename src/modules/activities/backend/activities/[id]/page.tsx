@@ -9,7 +9,7 @@ import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import {
   ArrowLeft, Mail, CalendarDays, Phone, FileText, CheckSquare,
-  AlertCircle, ExternalLink, Video, MapPin, Users, Paperclip,
+  AlertCircle, ExternalLink, Video, MapPin, Users, Paperclip, Download,
 } from 'lucide-react'
 import { getActivityTypeById } from '../../../activity-types'
 
@@ -303,6 +303,11 @@ function EmailSection({ data, t }: { data: ActivityDetail; t: (k: string, d: str
         </Field>
       )}
 
+      {/* Attachments — downloadable list resolved from the hub message link */}
+      {data.externalProvider === 'office365_mail' && data.externalId && (
+        <EmailAttachments externalMessageId={data.externalId} t={t} />
+      )}
+
       {/* Body preview */}
       {data.notes && (
         <Field label={t('activities.detail.field.notes', 'Preview')}>
@@ -310,6 +315,80 @@ function EmailSection({ data, t }: { data: ActivityDetail; t: (k: string, d: str
         </Field>
       )}
     </div>
+  )
+}
+
+type EmailAttachmentFile = { id: string; fileName: string; mimeType: string; fileSize: number; url: string }
+type EmailAttachmentSkipped = { fileName: string; fileSizeBytes: number; status: string }
+
+function formatBytes(bytes: number): string {
+  if (!bytes || bytes < 1024) return `${bytes || 0} B`
+  const kb = bytes / 1024
+  if (kb < 1024) return `${Math.round(kb)} KB`
+  return `${(kb / 1024).toFixed(1)} MB`
+}
+
+function EmailAttachments({
+  externalMessageId,
+  t,
+}: {
+  externalMessageId: string
+  t: (k: string, d: string) => string
+}) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['o365-email-attachments', externalMessageId],
+    queryFn: async () => {
+      const r = await apiCall<{ files: EmailAttachmentFile[]; skipped: EmailAttachmentSkipped[] }>(
+        `/api/channel_office365/channel_office365/email-attachments?externalMessageId=${encodeURIComponent(externalMessageId)}`,
+      )
+      return r.result ?? { files: [], skipped: [] }
+    },
+  })
+
+  const files = data?.files ?? []
+  const skipped = data?.skipped ?? []
+  if (!isLoading && files.length === 0 && skipped.length === 0) return null
+
+  const skippedLabel = (status: string): string => {
+    if (status === 'too_large') return t('activities.detail.email.attachments.tooLarge', 'too large to sync')
+    if (status === 'skipped_inline') return t('activities.detail.email.attachments.inline', 'inline image (skipped)')
+    if (status === 'fetch_error') return t('activities.detail.email.attachments.fetchError', 'failed to download')
+    return status
+  }
+
+  return (
+    <Field label={t('activities.detail.email.attachments', 'Attachments')}>
+      {isLoading ? (
+        <p className="text-sm text-muted-foreground">{t('activities.detail.email.attachments.loading', 'Loading…')}</p>
+      ) : (
+        <div className="space-y-1.5">
+          {files.map((f) => (
+            <a
+              key={f.id}
+              href={f.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-muted/50 transition-colors"
+            >
+              <Paperclip className="size-4 shrink-0 text-muted-foreground" />
+              <span className="flex-1 min-w-0 truncate">{f.fileName}</span>
+              <span className="text-xs text-muted-foreground shrink-0">{formatBytes(f.fileSize)}</span>
+              <Download className="size-4 shrink-0 text-muted-foreground" />
+            </a>
+          ))}
+          {skipped.map((s, i) => (
+            <div
+              key={`skipped-${i}`}
+              className="flex items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground"
+            >
+              <Paperclip className="size-4 shrink-0" />
+              <span className="flex-1 min-w-0 truncate">{s.fileName}</span>
+              <span className="text-xs shrink-0">{skippedLabel(s.status)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Field>
   )
 }
 

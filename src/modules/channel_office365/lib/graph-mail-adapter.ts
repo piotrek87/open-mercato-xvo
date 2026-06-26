@@ -115,6 +115,15 @@ interface MailCursorState {
   lastReceivedDateTime?: string
   /** ISO since-cutoff for the FIRST (bootstrap) scan. Set at provisioning (now − 7 days). */
   syncFromDate?: string
+  /**
+   * Carried through unchanged so attachment-sync settings survive polling. The hub persists
+   * fetchHistory()'s nextCursor as the channel's entire channelState via preservePushState(),
+   * whose preservation whitelist only covers Gmail push keys — anything else in the previous
+   * channelState (notably `settings`, written by the email-settings PATCH route and read by the
+   * email-attachment-fetcher subscriber) is dropped on every poll unless the adapter echoes it
+   * back here. The adapter never interprets it; it just round-trips it.
+   */
+  settings?: Record<string, unknown>
 }
 
 // ── Capabilities ──────────────────────────────────────────────
@@ -535,6 +544,9 @@ function normalizeGraphMessage(
     channelMetadata: {
       // RFC 5322 Message-ID used by hub thread matcher for JWZ dedup
       messageId: msg.internetMessageId ?? msg.id,
+      // Graph immutable id (opaque, e.g. "AAMk…"). Needed to call /me/messages/{id}/attachments;
+      // messageId above is the RFC Message-ID which Graph rejects as malformed for that endpoint.
+      graphId: msg.id,
       direction,
       folder: direction === 'inbound' ? 'inbox' : 'sentItems',
     },
@@ -545,10 +557,15 @@ function parseCursorState(channelState: Record<string, unknown>): MailCursorStat
   // Back-compat: channels persisted before the mailbox-wide rewrite carried { inbox, sentItems }
   // delta tokens. Those keys are ignored now — with no lastReceivedDateTime the next scan simply
   // re-bootstraps from syncFromDate, which is harmless (re-ingested rows dedupe on externalMessageId).
+  const settings =
+    channelState.settings && typeof channelState.settings === 'object' && !Array.isArray(channelState.settings)
+      ? (channelState.settings as Record<string, unknown>)
+      : undefined
   return {
     lastReceivedDateTime:
       typeof channelState.lastReceivedDateTime === 'string' ? channelState.lastReceivedDateTime : undefined,
     syncFromDate: typeof channelState.syncFromDate === 'string' ? channelState.syncFromDate : undefined,
+    ...(settings ? { settings } : {}),
   }
 }
 
@@ -626,6 +643,8 @@ class O365EmailChannelAdapter implements ChannelAdapter {
       // Advance the watermark; keep the previous one when this scan returned nothing new.
       lastReceivedDateTime: maxReceivedDateTime ?? cs.lastReceivedDateTime ?? cs.syncFromDate,
       syncFromDate: cs.syncFromDate,
+      // Echo settings back so the hub's push-state whitelist doesn't drop them (see MailCursorState).
+      ...(cs.settings ? { settings: cs.settings } : {}),
     }
 
     return {
