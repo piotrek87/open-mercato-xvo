@@ -1,5 +1,9 @@
 {
   "addTitle": "Add",
+  "communication_channels.notifications.channel_requires_reauth.title": "Kanał wymaga ponownego połączenia",
+  "communication_channels.notifications.channel_requires_reauth.body": "Uwierzytelnienie wygasło. Połącz kanał ponownie, aby wznowić wysyłanie i odbieranie wiadomości.",
+  "communication_channels.notifications.channel_requires_reauth.reconnect": "Połącz ponownie",
+  "communication_channels.notifications.channel_requires_reauth.unknownChannel": "Kanał",
   "api.docs.description": "Automatycznie wygenerowana definicja OpenAPI dla wszystkich włączonych modułów.",
   "api.docs.serverDescription": "Domyślne środowisko",
   "api.docs.title": "API Open Mercato",

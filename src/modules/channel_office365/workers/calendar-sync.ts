@@ -203,6 +203,34 @@ export async function syncChannel(
   if (credentialsService.save && (rawCreds.accessToken as string | undefined)) {
     try {
       await credentialsService.save(`channel_${O365_MAIL_PROVIDER_KEY}`, rawCreds, scope)
+
+      // The mail channel has no self-refresh: when its access token expired (e.g. the server
+      // was offline overnight) the hub poll marked it `requires_reauth` and emitted a reauth
+      // notification. We just refreshed + mirrored a VALID token into its scope, so the channel
+      // is healthy again — but nothing else clears that flag, leaving mail sync stuck and the
+      // user staring at a stale "requires re-auth" warning. Heal it here: flip any
+      // requires_reauth/error mail channel for this user back to connected so the hub resumes
+      // polling on the next tick.
+      const mailChannels = await em.find(CommunicationChannel, {
+        providerKey: O365_MAIL_PROVIDER_KEY,
+        isActive: true,
+        deletedAt: null,
+        ...(channel.userId ? { userId: channel.userId } : {}),
+        ...(channel.organizationId ? { organizationId: channel.organizationId } : {}),
+      })
+      const healed = mailChannels.filter(
+        (mc) => mc.status === 'requires_reauth' || mc.status === 'error',
+      )
+      if (healed.length > 0) {
+        for (const mc of healed) {
+          mc.status = 'connected' as typeof mc.status
+          mc.lastError = null
+        }
+        await em.flush()
+        console.info(
+          `[channel_office365:calendar-sync] healed ${healed.length} mail channel(s) from requires_reauth → connected after token refresh`,
+        )
+      }
     } catch (mirrorErr) {
       console.warn(
         `[channel_office365:calendar-sync] mirror creds to mail scope failed for channel ${channel.id}:`,

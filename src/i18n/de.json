@@ -1,5 +1,9 @@
 {
   "addTitle": "Add",
+  "communication_channels.notifications.channel_requires_reauth.title": "Kanal muss neu verbunden werden",
+  "communication_channels.notifications.channel_requires_reauth.body": "Die Authentifizierung ist abgelaufen. Verbinden Sie diesen Kanal erneut, um Nachrichten weiter zu senden und zu empfangen.",
+  "communication_channels.notifications.channel_requires_reauth.reconnect": "Erneut verbinden",
+  "communication_channels.notifications.channel_requires_reauth.unknownChannel": "Ein Kanal",
   "api.docs.description": "Automatisch generierte OpenAPI-Definition für alle aktivierten Module.",
   "api.docs.serverDescription": "Standardumgebung",
   "api.docs.title": "Open Mercato API",

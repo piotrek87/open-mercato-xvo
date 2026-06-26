@@ -1,5 +1,9 @@
 {
   "addTitle": "Add",
+  "communication_channels.notifications.channel_requires_reauth.title": "Channel needs reconnection",
+  "communication_channels.notifications.channel_requires_reauth.body": "Authentication expired. Reconnect this channel to resume sending and receiving messages.",
+  "communication_channels.notifications.channel_requires_reauth.reconnect": "Reconnect",
+  "communication_channels.notifications.channel_requires_reauth.unknownChannel": "A channel",
   "api.docs.description": "Auto-generated OpenAPI definition for all enabled modules.",
   "api.docs.serverDescription": "Default environment",
   "api.docs.title": "Open Mercato API",

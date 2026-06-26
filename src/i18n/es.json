@@ -1,5 +1,9 @@
 {
   "addTitle": "Add",
+  "communication_channels.notifications.channel_requires_reauth.title": "El canal necesita reconexión",
+  "communication_channels.notifications.channel_requires_reauth.body": "La autenticación ha caducado. Vuelve a conectar este canal para reanudar el envío y la recepción de mensajes.",
+  "communication_channels.notifications.channel_requires_reauth.reconnect": "Reconectar",
+  "communication_channels.notifications.channel_requires_reauth.unknownChannel": "Un canal",
   "api.docs.description": "Definición OpenAPI generada automáticamente para todos los módulos habilitados.",
   "api.docs.serverDescription": "Entorno predeterminado",
   "api.docs.title": "API de Open Mercato",
