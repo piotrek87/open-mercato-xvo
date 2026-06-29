@@ -1,11 +1,11 @@
 /**
- * When a CRM company is deleted, remove its orphaned ActivityLinks (and any dangling primary-link
- * reference). Mirrors the person-delete cleanup.
+ * When a CRM company is deleted, sweep orphaned ActivityLinks for the tenant/org. Mirrors the
+ * person-delete cleanup. See lib/entity-link-cleanup.ts for why this is a scoped orphan sweep.
  */
 
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import type { EntityManager } from '@mikro-orm/postgresql'
-import { cleanupActivityLinksForEntity } from '../lib/entity-link-cleanup'
+import { sweepOrphanActivityLinks } from '../lib/entity-link-cleanup'
 
 export const metadata = {
   event: 'customers.company.deleted',
@@ -16,12 +16,14 @@ export const metadata = {
 type CompanyDeletedPayload = { id: string; tenantId: string; organizationId?: string | null }
 
 export default async function handle(payload: CompanyDeletedPayload): Promise<void> {
-  if (!payload?.id || !payload.tenantId) return
+  if (!payload?.tenantId) return
   const container = await createRequestContainer()
   const em = (container.resolve('em') as EntityManager).fork()
-  await cleanupActivityLinksForEntity(em, {
-    entityType: 'customers:company',
-    entityId: payload.id,
+  const { deletedLinks } = await sweepOrphanActivityLinks(em, {
     tenantId: payload.tenantId,
+    organizationId: payload.organizationId ?? null,
   })
+  if (deletedLinks > 0) {
+    console.info(`[activities:cleanup-links] company delete — removed ${deletedLinks} orphaned activity link(s)`)
+  }
 }

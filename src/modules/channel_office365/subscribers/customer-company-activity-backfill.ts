@@ -17,6 +17,7 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { CustomerEntity } from '@open-mercato/core/modules/customers/data/entities'
 import { backfillO365HistoryForPerson } from '../lib/o365-history-backfill'
+import { resolveCustomerEntityId } from '../lib/resolve-customer-entity-id'
 
 type SubscriberContext = {
   resolve: <T = unknown>(name: string) => T
@@ -38,10 +39,13 @@ export default async function handler(
   payload: CompanyCreatedPayload,
   ctx: SubscriberContext,
 ): Promise<void> {
-  const { id: companyId, tenantId, organizationId } = payload
-  if (!tenantId || !organizationId || !companyId) return
+  const { id: payloadId, tenantId, organizationId } = payload
+  if (!tenantId || !organizationId || !payloadId) return
 
   const em = (ctx.resolve('em') as EntityManager).fork()
+
+  // payloadId is the company profile id; resolve the real customer_entity id.
+  const companyId = await resolveCustomerEntityId(em, payloadId, 'company')
 
   // People already linked to this company.
   let personIds: string[] = []
