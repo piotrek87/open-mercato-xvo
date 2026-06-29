@@ -61,6 +61,16 @@ const CI_COLS = [
   'participants', 'channel_provider_key', 'pinned', 'created_at', 'updated_at',
 ] as const
 
+// Columns for the per-message "extMsg-CI" rows that drive the built-in "E-maile" threads tab.
+// Distinct from CI_COLS (the "source-CI" rows that drive "Aktywności"): here `source` is NULL and
+// `external_message_id` carries the MessageChannelLink PK — the anchor buildPersonEmailThreads reads.
+const EMAIL_CI_COLS = [
+  'id', 'organization_id', 'tenant_id', 'entity_id',
+  'interaction_type', 'title', 'body', 'occurred_at',
+  'author_user_id', 'visibility', 'status',
+  'external_message_id', 'channel_provider_key', 'created_at', 'updated_at',
+] as const
+
 // Mirrors crm-email-linker.ACTIVITY_COLS so a backfilled Activity is indistinguishable from a
 // live-synced one (same external_id dedup key, same lifecycle).
 const ACTIVITY_COLS = [
@@ -74,6 +84,94 @@ const ACTIVITY_COLS = [
 type HubLinkRow = {
   external_message_id: string
   channel_payload: EmailChannelPayload | null
+}
+
+type HubEmailLinkRow = {
+  id: string
+  direction: string | null
+  provider_key: string | null
+  channel_payload: EmailChannelPayload | null
+  created_at: Date | null
+}
+
+/**
+ * Rebuild the per-message CustomerInteraction rows that drive the built-in "E-maile" (Gmail-style
+ * threads) tab on a Person card — the missing half of Fix #2.
+ *
+ * That tab (core `buildPersonEmailThreads`) reads ONLY interactions whose `external_message_id`
+ * points at a `MessageChannelLink` row. Those "extMsg-CI" rows are produced live by the core
+ * `link-channel-message-handler` when an inbound/outbound email matches an ALREADY-existing Person.
+ * Emails synced before this Person existed never got that match, so the tab stays empty even though
+ * the "Aktywności" tab (source-CI rows, `external_message_id` NULL) is populated.
+ *
+ * We rebuild the exact shape `persistInteractions` writes live: `source` NULL, `external_message_id`
+ * = MessageChannelLink.id, `channel_provider_key` = 'office365_mail' (so our timeline dedup filter
+ * still hides it from "Aktywności"), `visibility` = 'private' + `author_user_id` = mailbox owner for
+ * a user-scoped channel. Idempotent via the partial unique index
+ * `customer_interactions_email_dedupe_uq (entity_id, external_message_id)`.
+ */
+async function createPersonEmailInteractionsFromHub(
+  em: EntityManager,
+  scope: BackfillScope,
+  personId: string,
+  email: string,
+  channelUserId: string | null,
+  now: Date,
+): Promise<number> {
+  const { tenantId, organizationId } = scope
+
+  const links = (await em.getConnection('read').execute(
+    `SELECT mcl.id, mcl.direction, mcl.provider_key, mcl.channel_payload, mcl.created_at
+     FROM message_channel_links mcl
+     WHERE mcl.tenant_id = ?
+       AND mcl.organization_id = ?
+       AND mcl.provider_key = ?
+       AND mcl.id IS NOT NULL
+       AND (
+         lower(mcl.channel_payload->>'from') = ?
+         OR EXISTS (
+           SELECT 1 FROM jsonb_array_elements_text(
+             CASE WHEN jsonb_typeof(mcl.channel_payload->'to') = 'array'
+                  THEN mcl.channel_payload->'to' ELSE '[]'::jsonb END) AS t(addr)
+           WHERE lower(t.addr) = ?)
+         OR EXISTS (
+           SELECT 1 FROM jsonb_array_elements_text(
+             CASE WHEN jsonb_typeof(mcl.channel_payload->'cc') = 'array'
+                  THEN mcl.channel_payload->'cc' ELSE '[]'::jsonb END) AS c(addr)
+           WHERE lower(c.addr) = ?)
+       )`,
+    [tenantId, organizationId, O365_MAIL_PROVIDER_KEY, email, email, email],
+  )) as HubEmailLinkRow[]
+
+  if (links.length === 0) return 0
+
+  // Mirror core resolveVisibility: user-scoped channel → 'private' (visible to the mailbox owner,
+  // i.e. its author), tenant-scoped → 'shared'. The owner-only v1 rule lives in the read filter.
+  const visibility = channelUserId ? 'private' : 'shared'
+  const values: unknown[][] = []
+  for (const link of links) {
+    const cp = link.channel_payload
+    if (!cp) continue
+    const occurredAt = parseReceivedAt(cp) ?? link.created_at ?? null
+    values.push([
+      randomUUID(), organizationId, tenantId, personId,
+      'email', cp.subject ?? null, extractEmailBody(cp), occurredAt,
+      channelUserId, visibility, 'done',
+      link.id, link.provider_key ?? O365_MAIL_PROVIDER_KEY, now, now,
+    ])
+  }
+  if (values.length === 0) return 0
+
+  const valueClauses = values.map(() => '(' + EMAIL_CI_COLS.map(() => '?').join(', ') + ')').join(', ')
+  await em.getConnection().execute(
+    `INSERT INTO customer_interactions (${EMAIL_CI_COLS.join(', ')})
+     VALUES ${valueClauses}
+     ON CONFLICT (entity_id, external_message_id)
+       WHERE external_message_id IS NOT NULL AND deleted_at IS NULL
+     DO NOTHING`,
+    values.flat(),
+  )
+  return values.length
 }
 
 /**
@@ -233,6 +331,30 @@ export async function backfillO365HistoryForPerson(
   } catch (err) {
     console.warn(
       '[channel_office365:o365-history-backfill] hub rebuild failed (continuing with existing activities):',
+      err instanceof Error ? err.message : err,
+    )
+  }
+
+  // E-maile tab (Fix #2 second half): rebuild the per-message extMsg-CI rows the built-in
+  // threads tab reads. Independent of the Activity/source-CI work below (those drive "Aktywności"),
+  // and runs regardless of whether any Activity exists. Non-fatal — never block the rest.
+  try {
+    const mailChannel = await em.findOne(CommunicationChannel, {
+      providerKey: O365_MAIL_PROVIDER_KEY,
+      tenantId,
+      organizationId,
+    })
+    const emailThreadCis = await createPersonEmailInteractionsFromHub(
+      em, scope, personId, email, mailChannel?.userId ?? null, now,
+    )
+    if (emailThreadCis > 0) {
+      console.info(
+        `[channel_office365:o365-history-backfill] person ${personId} (${email}) — linked ${emailThreadCis} email(s) to the E-maile threads tab`,
+      )
+    }
+  } catch (err) {
+    console.warn(
+      '[channel_office365:o365-history-backfill] E-maile thread CI backfill failed (continuing):',
       err instanceof Error ? err.message : err,
     )
   }
