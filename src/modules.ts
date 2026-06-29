@@ -134,6 +134,66 @@ export const enabledModules: ModuleEntry[] = [
       },
     },
   },
+  { id: 'activities', from: '@app' },
+  {
+    id: 'channel_office365',
+    from: '@app',
+    overrides: {
+      routes: {
+        api: {
+          'GET /api/customers/interactions': {
+            handler: async (req: Request) => {
+              const { GET } = await import('./modules/channel_office365/lib/interactions-get-override')
+              return GET(req)
+            },
+            metadata: { requireAuth: true, requireFeatures: ['customers.interactions.view'] },
+          },
+          'GET /api/customers/interactions/counts': {
+            handler: async (req: Request) => {
+              const { getInteractionCounts } = await import('./modules/channel_office365/lib/interactions-get-override')
+              return getInteractionCounts(req)
+            },
+            metadata: { requireAuth: true, requireFeatures: ['customers.interactions.view'] },
+          },
+          // Hide the O365 calendar channel from the generic "my channels" list (and thus from the
+          // CRM compose "Send as" picker, which can't send email through a calendar channel and
+          // showed two confusing near-identical entries). The mail channel stays so compose can
+          // pick it. Our M365 settings page + connect widget pass ?includeCalendar=1 for the
+          // unfiltered list.
+          'GET /api/communication_channels/me/channels': {
+            handler: async (req: Request) => {
+              const { GET } = await import('./modules/channel_office365/lib/channel-list-filter')
+              return GET(req)
+            },
+            metadata: { requireAuth: true, requireFeatures: ['communication_channels.connect_user_channel'] },
+          },
+          // Guard deleting the office365_mail sibling channel from the generic channels list:
+          // it must be removed via "Disconnect" on the Microsoft 365 settings page (cascade
+          // cleanup), not deleted directly (which would break email sync). The channel is
+          // intentionally NOT hidden from /me/channels anymore — the CRM compose/reply dialog
+          // needs it there to pick it as the outbound send channel.
+          'DELETE /api/communication_channels/channels/[id]': {
+            handler: async (req: Request) => {
+              const { DELETE } = await import('./modules/channel_office365/lib/channel-delete-guard')
+              return DELETE(req)
+            },
+            metadata: { requireAuth: true, requireFeatures: ['communication_channels.connect_user_channel'] },
+          },
+          // When user already has an active office365 channel, redirect to M365
+          // settings page instead of starting a new OAuth flow (prevents
+          // mailbox_already_connected errors from the generic channels page).
+          // Key must use [provider] to match the framework's dynamic route pattern.
+          'POST /api/communication_channels/oauth/[provider]/initiate': {
+            handler: async (req: Request) => {
+              const { POST } = await import('./modules/channel_office365/lib/oauth-initiate-guard')
+              return POST(req)
+            },
+            metadata: { requireAuth: true, requireFeatures: ['communication_channels.connect_user_channel'] },
+          },
+        },
+      },
+    },
+  },
   { id: 'ratelimit_probe', from: '@app' },
 ]
 
