@@ -23,7 +23,9 @@ type EmailSettings = z.infer<typeof emailSettingsSchema>
 function readSettings(channelState: Record<string, unknown> | null | undefined): EmailSettings {
   const raw = (channelState?.settings ?? {}) as Record<string, unknown>
   return {
-    syncAttachments: typeof raw.syncAttachments === 'boolean' ? raw.syncAttachments : false,
+    // Default ON: attachments sync unless the user explicitly turned it off. Mirrors
+    // the fetcher gate (skip only when === false). Inline images stay default-off.
+    syncAttachments: typeof raw.syncAttachments === 'boolean' ? raw.syncAttachments : true,
     maxAttachmentSizeMb: typeof raw.maxAttachmentSizeMb === 'number' ? raw.maxAttachmentSizeMb : 10,
     syncInlineImages: typeof raw.syncInlineImages === 'boolean' ? raw.syncInlineImages : false,
   }

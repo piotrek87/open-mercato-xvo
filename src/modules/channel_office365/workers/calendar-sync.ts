@@ -230,6 +230,35 @@ export async function syncChannel(
         console.info(
           `[channel_office365:calendar-sync] healed ${healed.length} mail channel(s) from requires_reauth → connected after token refresh`,
         )
+
+        // Clear the stale "requires re-auth" notification(s) for the healed
+        // channel(s). Without this the notification lingers in the feed and the
+        // toast re-fires on every login/refresh even though the channel is now
+        // healthy: /api/notifications filters on status (returns anything not
+        // 'dismissed', INCLUDING 'read'), and the toast dispatcher's dedup is
+        // in-memory so it re-runs after each reload. The notification is keyed to
+        // the channel via source_entity_id (= channel id); flip the `status`
+        // column to 'dismissed' (dismissed_at alone is not enough — the feed
+        // filters on status).
+        try {
+          const healedIds = healed.map((mc) => mc.id)
+          const placeholders = healedIds.map(() => '?').join(', ')
+          await em.getConnection().execute(
+            `UPDATE notifications
+             SET status = 'dismissed',
+                 dismissed_at = COALESCE(dismissed_at, now()),
+                 read_at = COALESCE(read_at, now())
+             WHERE type = 'communication_channels.channel.requires_reauth'
+               AND source_entity_id IN (${placeholders})
+               AND status <> 'dismissed'`,
+            healedIds,
+          )
+        } catch (notifErr) {
+          console.warn(
+            `[channel_office365:calendar-sync] failed to dismiss reauth notification(s) after heal:`,
+            notifErr instanceof Error ? notifErr.message : notifErr,
+          )
+        }
       }
     } catch (mirrorErr) {
       console.warn(

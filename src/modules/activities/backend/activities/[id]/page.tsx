@@ -338,10 +338,13 @@ function EmailAttachments({
   const { data, isLoading } = useQuery({
     queryKey: ['o365-email-attachments', externalMessageId],
     queryFn: async () => {
-      const r = await apiCall<{ files: EmailAttachmentFile[]; skipped: EmailAttachmentSkipped[] }>(
+      // The endpoint returns a unified `groups[]` shape; single-email mode yields
+      // exactly one group (or none when the email has no attachments).
+      const r = await apiCall<{ groups?: Array<{ files?: EmailAttachmentFile[]; skipped?: EmailAttachmentSkipped[] }> }>(
         `/api/channel_office365/channel_office365/email-attachments?externalMessageId=${encodeURIComponent(externalMessageId)}`,
       )
-      return r.result ?? { files: [], skipped: [] }
+      const group = r.result?.groups?.[0]
+      return { files: group?.files ?? [], skipped: group?.skipped ?? [] }
     },
   })
 

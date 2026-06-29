@@ -5,6 +5,7 @@ import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { validateCrudMutationGuard, runCrudMutationGuardAfterSuccess } from '@open-mercato/shared/lib/crud/mutation-guard'
+import { runCustomRouteAfterInterceptors } from '@open-mercato/shared/lib/crud/custom-route-interceptor'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
@@ -279,12 +280,40 @@ export async function GET(request: Request) {
     const items = hasMore ? results.slice(0, parsedLimit) : results
     const nextCursor = hasMore && items.length > 0 ? encodeCursor(items[items.length - 1]) : null
 
-    return NextResponse.json({
+    const responseBody: Record<string, unknown> = {
       data: items.map((a) => mapActivityToResponse(a)),
       hasMore,
       nextCursor,
       total,
+    }
+
+    // Opt into custom-route after-interceptors so other modules can enrich the
+    // list response without the activities module depending on them (e.g.
+    // channel_office365 adds `emailAttachmentCount` to office365_mail rows).
+    const userFeatures = Array.isArray((auth as Record<string, unknown>)['features'])
+      ? ((auth as Record<string, unknown>)['features'] as string[])
+      : []
+    const intercepted = await runCustomRouteAfterInterceptors({
+      routePath: 'activities',
+      method: 'GET',
+      request: {
+        method: 'GET',
+        url: request.url,
+        query: Object.fromEntries(url.searchParams.entries()),
+        headers: Object.fromEntries(request.headers.entries()),
+      },
+      response: { statusCode: 200, body: responseBody, headers: {} },
+      context: {
+        em,
+        container,
+        userId: auth.sub ?? null,
+        organizationId: orgId,
+        tenantId: auth.tenantId,
+        userFeatures,
+      },
     })
+
+    return NextResponse.json(intercepted.body, { status: intercepted.statusCode })
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: 'Validation failed', details: error.issues }, { status: 400 })

@@ -13,6 +13,26 @@ export const injectionTable: ModuleInjectionTable = {
       priority: 90,
     },
   ],
+  // Downloadable email-attachments shown as a dedicated tab on the customer
+  // (person + company) detail, next to "E-maile" — discoverable without scrolling.
+  // groupLabel is rendered raw by PersonDetailTabs/CompanyDetailTabs (no t()), so
+  // it must be a literal display string.
+  'detail:customers.person:tabs': [
+    {
+      widgetId: 'channel_office365.injection.email-attachments-section',
+      priority: 50,
+      groupId: 'office365-email-attachments',
+      groupLabel: 'Załączniki e-mail',
+    },
+  ],
+  'detail:customers.company:tabs': [
+    {
+      widgetId: 'channel_office365.injection.email-attachments-section',
+      priority: 50,
+      groupId: 'office365-email-attachments',
+      groupLabel: 'Załączniki e-mail',
+    },
+  ],
 
 }
 

@@ -138,7 +138,12 @@ export default async function handler(
     | { syncAttachments?: boolean; maxAttachmentSizeMb?: number; syncInlineImages?: boolean }
     | undefined
 
-  if (settings?.syncAttachments !== true) return
+  // Attachments sync is ON by default — fetch unless the user explicitly disabled
+  // it (settings.syncAttachments === false). Inline images are still skipped by
+  // default (syncInlineImages), so this stores real attachments only, not signature
+  // logos. Unset/undefined → treated as enabled (covers channels provisioned before
+  // the toggle existed, with no migration).
+  if (settings?.syncAttachments === false) return
 
   const maxBytes = typeof settings?.maxAttachmentSizeMb === 'number'
     ? settings.maxAttachmentSizeMb * 1024 * 1024

@@ -369,6 +369,46 @@ export default function Office365Page() {
     }
   }
 
+  // Reliable date-backfill: rewind the mail channel's sync window to the chosen
+  // date, then trigger the regular poll (poll-now) to drain it. Replaces the
+  // fragile bulk "import history" worker — the poll has no user-facing progress
+  // job (so it never shows "stale" or aborts the whole run on one transient
+  // error), drains the window in one background pass, and dedupes on re-sync.
+  async function handleMailSyncFromDate(sinceDate: string) {
+    if (!sinceDate) return
+    setImportingHistory(true)
+    try {
+      const w = await apiCall<{ channelId: string }>(
+        '/api/channel_office365/channel_office365/mail-sync-window',
+        { method: 'POST', body: JSON.stringify({ sinceDate: new Date(sinceDate).toISOString() }) },
+      )
+      if (!w.ok || !w.result?.channelId) {
+        if (w.status === 404) {
+          flash(t('channel_office365.mailSync.noChannel', 'Email channel not provisioned — reconnect Microsoft 365'), 'error')
+        } else {
+          flash(t('channel_office365.mailSync.error', 'Failed to start email sync'), 'error')
+        }
+        return
+      }
+      const r = await apiCall(`/api/communication_channels/channels/${w.result.channelId}/poll-now`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      })
+      if (r.ok) {
+        flash(t('channel_office365.mailSync.success', 'Email sync queued — messages will appear shortly'), 'success')
+        setTimeout(() => {
+          void queryClient.invalidateQueries({ queryKey: ['channel_office365_state'] })
+        }, 3000)
+      } else {
+        flash(t('channel_office365.mailSync.error', 'Failed to start email sync'), 'error')
+      }
+    } catch {
+      flash(t('channel_office365.mailSync.error', 'Failed to start email sync'), 'error')
+    } finally {
+      setImportingHistory(false)
+    }
+  }
+
   async function handleImportHistory(sinceDays?: number) {
     setImportingHistory(true)
     try {
@@ -740,10 +780,7 @@ export default function Office365Page() {
                               <Button
                                 size="sm"
                                 variant="outline"
-                                onClick={() => {
-                                  const daysDiff = Math.ceil((Date.now() - new Date(emailSyncFrom).getTime()) / 86400000)
-                                  void handleImportHistory(Math.max(1, Math.min(365, daysDiff)))
-                                }}
+                                onClick={() => void handleMailSyncFromDate(emailSyncFrom)}
                                 disabled={!emailSyncFrom || importingHistory}
                                 aria-label={t('channel_office365.emailSyncFrom.button', 'Sync email from selected date')}
                               >
@@ -791,10 +828,7 @@ export default function Office365Page() {
                           <button
                             type="button"
                             className="mt-1 text-xs underline underline-offset-2 hover:text-foreground transition-colors disabled:opacity-50"
-                            onClick={() => {
-                              const daysDiff = Math.ceil((Date.now() - new Date(emailSyncFrom).getTime()) / 86400000)
-                              void handleImportHistory(Math.max(1, Math.min(365, daysDiff)))
-                            }}
+                            onClick={() => void handleMailSyncFromDate(emailSyncFrom)}
                             disabled={importingHistory}
                           >
                             {importingHistory
