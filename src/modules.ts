@@ -134,6 +134,7 @@ export const enabledModules: ModuleEntry[] = [
       },
     },
   },
+  { id: 'companies_pl', from: '@app' },
   { id: 'ratelimit_probe', from: '@app' },
 ]
 
