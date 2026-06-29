@@ -194,7 +194,7 @@ async function createMissingMailActivitiesFromHub(
   const inserted = (await em.getConnection().execute(
     `INSERT INTO activities (${ACTIVITY_COLS.join(', ')}) VALUES ${valueClauses}
      ON CONFLICT (external_id, external_provider, organization_id)
-       WHERE external_id IS NOT NULL
+       WHERE external_id IS NOT NULL AND deleted_at IS NULL
      DO NOTHING
      RETURNING id`,
     candidates.flatMap((c) => c.values),
@@ -225,7 +225,17 @@ export async function backfillO365HistoryForPerson(
 
   // Step 0 (Fix #2): rebuild Activities for emails synced before this person existed (hub-link only,
   // no Activity yet). These are INSERTed here and returned so the link + CI steps below process them.
-  const hubRows = await createMissingMailActivitiesFromHub(em, scope, email, now)
+  // Non-fatal: if hub rebuild fails (e.g. a transient DB error), still link + CI the emails that
+  // already have an Activity — never let the hub step block the rest of the backfill.
+  let hubRows: ActivityRow[] = []
+  try {
+    hubRows = await createMissingMailActivitiesFromHub(em, scope, email, now)
+  } catch (err) {
+    console.warn(
+      '[channel_office365:o365-history-backfill] hub rebuild failed (continuing with existing activities):',
+      err instanceof Error ? err.message : err,
+    )
+  }
 
   // Raw SQL for JSONB containment — MikroORM has no @> helper. Fetch the full activity row so we can
   // rebuild CustomerInteraction records (subject/body/time/source). Includes the activities just
