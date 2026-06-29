@@ -37,7 +37,7 @@ export default function ConnectOffice365Widget(
 
   if (connected) {
     return (
-      <div className="flex items-center gap-2 self-center">
+      <div className="flex items-center gap-2">
         <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
           <CheckCircle2 className="size-4 text-status-success-text" />
           {t('channel_office365.status.connected', 'Connected')}
@@ -60,7 +60,6 @@ export default function ConnectOffice365Widget(
     <Button
       type="button"
       variant="outline"
-      className="self-center"
       onClick={() => void connect()}
       disabled={pending}
     >

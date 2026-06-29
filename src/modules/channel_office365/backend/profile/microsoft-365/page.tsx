@@ -811,34 +811,6 @@ export default function Office365Page() {
                       </div>
                     </div>
 
-                    {/* Migration notice — emails via hub adapter since 2026-06-19; older records live in activity timeline */}
-                    {mailEnabled && (
-                      <Alert variant="default" className="py-2">
-                        <Info className="size-4 shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium">
-                            {t('channel_office365.migration.title', 'Synchronizacja emaili przez nową ścieżkę od 2026-06-19')}
-                          </p>
-                          <p className="text-xs text-muted-foreground mt-0.5">
-                            {t(
-                              'channel_office365.migration.description',
-                              'Starsze wiadomości są widoczne w Osi czasu aktywności. Nowe emaile trafiają do zakładki E-maile.',
-                            )}
-                          </p>
-                          <button
-                            type="button"
-                            className="mt-1 text-xs underline underline-offset-2 hover:text-foreground transition-colors disabled:opacity-50"
-                            onClick={() => void handleMailSyncFromDate(emailSyncFrom)}
-                            disabled={importingHistory}
-                          >
-                            {importingHistory
-                              ? t('channel_office365.mailSync.syncing', 'Syncing…')
-                              : t('channel_office365.importHistory.cta', 'Synchronizuj od wybranej daty →')}
-                          </button>
-                        </div>
-                      </Alert>
-                    )}
-
                     {/* Attachments toggle — only shown when email sync is enabled */}
                     {mailEnabled && (
                       <div className="rounded-md bg-muted/30 px-3 py-2 space-y-1">
