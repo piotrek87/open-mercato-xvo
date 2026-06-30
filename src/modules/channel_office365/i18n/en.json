@@ -76,7 +76,6 @@
   "channel_office365.compose.crmLoading": "Loading attachments…",
   "channel_office365.compose.crmNoSubject": "(no subject)",
   "channel_office365.compose.crmRecordFiles": "Contact files",
-  "channel_office365.compose.newEmail": "New email",
   "channel_office365.compose.removeAttachment": "Remove attachment",
   "channel_office365.compose.replyTitle": "Reply",
   "channel_office365.compose.selectChannel": "Select account",
