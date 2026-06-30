@@ -91,7 +91,6 @@ export default function CompanyLookupWidget({
   const source = (data ?? context?.data) as FormValues | CompanyOverview | undefined
   const isDetail = source ? isDetailContext(source) : false
   const companyId = isDetail && source ? (source as CompanyOverview).company?.id : null
-  const isCreateWithAddresses = false
 
   React.useEffect(() => {
     if (isDetail && pendingAddresses && pendingAddresses.companyId !== companyId) setPendingAddresses(null)
@@ -165,7 +164,6 @@ export default function CompanyLookupWidget({
     setError(null)
     setLoading(true)
     try {
-      // Adaptation: raw fetch() → apiCall (project convention)
       const { ok, result: lookupResult, response } = await apiCall<{
         nip?: string
         krs?: string
@@ -527,7 +525,7 @@ export default function CompanyLookupWidget({
           )}
         </Button>
       </div>
-      {((pendingAddresses?.companyId && pendingAddresses.companyId === companyId) || isCreateWithAddresses) &&
+      {(pendingAddresses?.companyId && pendingAddresses.companyId === companyId) &&
         (pendingAddresses?.residenceAddress || pendingAddresses?.workingAddress) && (
           <div className="flex flex-wrap items-center gap-2 text-xs">
             {pendingAddresses?.residenceAddress && (
