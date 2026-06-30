@@ -1,13 +1,16 @@
 'use client'
 
 import * as React from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { ArrowDownLeft, ArrowUpRight, Download, Paperclip } from 'lucide-react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { ArrowDownLeft, ArrowUpRight, Download, Paperclip, Trash2 } from 'lucide-react'
 import type { InjectionWidgetComponentProps } from '@open-mercato/shared/modules/widgets/injection'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
+import { IconButton } from '@open-mercato/ui/primitives/icon-button'
 import { EmptyState } from '@open-mercato/ui/backend/EmptyState'
 import { LoadingMessage } from '@open-mercato/ui/backend/detail'
+import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
+import { flash } from '@open-mercato/ui/backend/FlashMessages'
 
 type AttachmentFile = { id: string; fileName: string; mimeType: string; fileSize: number; url: string }
 type AttachmentGroup = {
@@ -55,6 +58,8 @@ export default function EmailAttachmentsSectionWidget(
 ) {
   const t = useT()
   const scope = readScope(context)
+  const queryClient = useQueryClient()
+  const { confirm, ConfirmDialogElement } = useConfirmDialog()
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['channel_office365.email-attachments', scope?.param, scope?.id],
@@ -67,6 +72,31 @@ export default function EmailAttachmentsSectionWidget(
       return r.result ?? { groups: [], totalFiles: 0, emailsWithAttachments: 0 }
     },
   })
+
+  // User-initiated removal of an OM attachment copy (mirrors the Files tab). Safe: the mail sync is
+  // idempotent on (channel, external_message_id), so a removed attachment is NOT re-created on the
+  // next poll (the message stays linked). Reuses the shared attachments DELETE endpoint.
+  const handleDelete = React.useCallback(
+    async (file: AttachmentFile) => {
+      const confirmed = await confirm({
+        title: t('channel_office365.attachments.section.deleteConfirm', 'Delete attachment “{name}”?', { name: file.fileName }),
+        variant: 'destructive',
+      })
+      if (!confirmed) return
+      const call = await apiCall<{ ok?: boolean; error?: string }>(
+        `/api/attachments?id=${encodeURIComponent(file.id)}`,
+        { method: 'DELETE' },
+        { fallback: null },
+      )
+      if (!call.ok) {
+        flash(t('channel_office365.attachments.section.deleteError', 'Failed to delete attachment'), 'error')
+        return
+      }
+      flash(t('channel_office365.attachments.section.deleteSuccess', 'Attachment deleted'), 'success')
+      await queryClient.invalidateQueries({ queryKey: ['channel_office365.email-attachments', scope?.param, scope?.id] })
+    },
+    [confirm, t, queryClient, scope?.param, scope?.id],
+  )
 
   if (!scope) return null
 
@@ -113,22 +143,36 @@ export default function EmailAttachmentsSectionWidget(
           </div>
           <div className="space-y-1.5">
             {group.files.map((f) => (
-              <a
+              <div
                 key={f.id}
-                href={f.url}
-                target="_blank"
-                rel="noopener noreferrer"
                 className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors hover:bg-muted/50"
               >
                 <Paperclip className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-                <span className="min-w-0 flex-1 truncate">{f.fileName}</span>
-                <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(f.fileSize)}</span>
-                <Download className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-              </a>
+                <a
+                  href={f.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex min-w-0 flex-1 items-center gap-2"
+                >
+                  <span className="min-w-0 flex-1 truncate">{f.fileName}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(f.fileSize)}</span>
+                  <Download className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                </a>
+                <IconButton
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  aria-label={t('channel_office365.attachments.section.deleteAriaLabel', 'Delete attachment')}
+                  onClick={() => void handleDelete(f)}
+                >
+                  <Trash2 className="size-4" />
+                </IconButton>
+              </div>
             ))}
           </div>
         </div>
       ))}
+      {ConfirmDialogElement}
     </div>
   )
 }
