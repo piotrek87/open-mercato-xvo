@@ -1,5 +1,7 @@
 # Microsoft 365 integration (mail + calendar + attachments)
 
+> 🇵🇱 Polish version: [o365-mail-calendar-integration.pl.md](o365-mail-calendar-integration.pl.md)
+
 Branch (portable bundle): `integration/o365` · Modules: `channel_office365`, `mail_attachments`
 (+ activity-analytics changes in the `activities` module).
 
