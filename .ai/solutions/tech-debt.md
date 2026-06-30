@@ -109,6 +109,26 @@ retire it**. These are deliberate trade-offs, not accidents.
 
 ---
 
+## 0.6.5 upgrade verification (2026-06-30)
+
+Checked every watch-list item against the 0.6.5 upstream. **0.6.5 is a patch — it introduces no new
+mechanism that lets us retire the workarounds; the upstream seams are still absent.** Nothing fully
+closed; one item downgraded.
+
+| # | 0.6.5 finding | Verdict |
+|---|---|---|
+| 1 emails-tab fork | Core `ComposeEmailDialog` still has no attachment support; `PersonEmailThreadsTab` still rendered directly (no `useRegisteredComponent`); `communication_channels/widgets/components.ts` `componentOverrides` is **still `[]`** (the promised Messages `registerComponent` is still unshipped). | **Remains** |
+| 2 CSS tab-hide | `PersonDetailTabs` still exposes no hide/replace/registerComponent API for built-in tabs. | **Remains** |
+| 3 channelMetadata refs | `send-as-user` still has no typed `attachments` field. | **Remains** |
+| 4 delete-on-send | Sent-folder sync dedup unchanged. | **Remains** |
+| 5 double-nested API paths | Route generator convention unchanged; generated paths still double; our code matches (no break). Could be simplified independently (move route files) — not upgrade-driven. | **Remains** (cosmetic) |
+| 6 lazy DI in adapter | Channel adapters still registered via `asValue` registry — no DI in constructor. | **Remains** |
+| 7 cross-module deal raw SQL | New `deals/aggregate` API exists but is **per-pipeline-stage** kanban aggregation with **no activity-recency join**, so it does not replace our coverage/attention queries. However core's own `deals/aggregate` uses the **same** raw-SQL-on-`customer_deals` pattern for non-encrypted aggregates (decrypting titles separately) — i.e. our approach mirrors a sanctioned core pattern. | **Downgraded** (accepted pattern, not a hack) |
+| 8 hardcoded entity id | Unchanged; trivial frozen-id string. | **Remains** |
+
+**Conclusion:** no fork can be removed on 0.6.5. Re-check #1/#2/#3 when core ships the compose
+component handle / tab-override API / typed attachments (the "v2" the core source still references).
+
 ## Resolved this cycle (no longer debt)
 - companies_pl: **RBAC gate** (`companies_pl.lookup` feature + route `requireFeatures`), **fetch
   timeout** (AbortController), **mock guard** (mock disabled in production), **NIP/REGON checksum +
