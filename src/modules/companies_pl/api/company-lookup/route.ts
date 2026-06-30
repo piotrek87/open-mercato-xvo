@@ -1,8 +1,22 @@
 import { NextResponse } from 'next/server'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
+import { isValidNip } from '../../lib/polishIdentifiers'
 
 export const metadata = {
-  GET: { requireAuth: true },
+  GET: { requireAuth: true, requireFeatures: ['companies_pl.lookup'] },
+}
+
+const LOOKUP_TIMEOUT_MS = 8000
+
+/** fetch with an abort timeout so a hung external API can't hang the request. */
+async function fetchWithTimeout(target: string, ms = LOOKUP_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), ms)
+  try {
+    return await fetch(target, { method: 'GET', headers: { Accept: 'application/json' }, signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 export const openApi = {
@@ -42,8 +56,8 @@ export async function GET(req: Request) {
   const url = new URL(req.url)
   const rawNip = url.searchParams.get('nip') ?? ''
   const nip = rawNip.replace(/\D/g, '').slice(0, 10)
-  if (nip.length !== 10) {
-    return NextResponse.json({ error: 'Podaj poprawny NIP (10 cyfr).' }, { status: 400 })
+  if (!isValidNip(nip)) {
+    return NextResponse.json({ error: 'Podaj poprawny NIP (10 cyfr, poprawna suma kontrolna).' }, { status: 400 })
   }
 
   const customApiUrl = process.env.OM_COMPANY_LOOKUP_API_URL?.trim()
@@ -52,7 +66,7 @@ export async function GET(req: Request) {
       const target = customApiUrl.includes('?')
         ? `${customApiUrl.replace(/\?$/, '')}&nip=${encodeURIComponent(nip)}`
         : `${customApiUrl}?nip=${encodeURIComponent(nip)}`
-      const res = await fetch(target, { method: 'GET', headers: { Accept: 'application/json' } })
+      const res = await fetchWithTimeout(target)
       if (!res.ok) {
         const text = await res.text()
         return NextResponse.json(
@@ -79,7 +93,7 @@ export async function GET(req: Request) {
     const date = new Date().toISOString().slice(0, 10)
     const wlUrl = `${WL_API_BASE}/api/search/nip/${encodeURIComponent(nip)}?date=${date}`
     try {
-      const res = await fetch(wlUrl, { method: 'GET', headers: { Accept: 'application/json' } })
+      const res = await fetchWithTimeout(wlUrl)
       if (!res.ok) {
         const text = await res.text()
         return NextResponse.json(
@@ -107,7 +121,14 @@ export async function GET(req: Request) {
     }
   }
 
-  // Mock fallback gdy OM_USE_WL_API=false (dev bez dostępu do MF)
+  // Mock fallback when OM_USE_WL_API=false — DEV ONLY (no MF access). Never serve fabricated company
+  // data in production: a misconfigured prod env should fail loudly, not return a fake KRS/name.
+  if (process.env.NODE_ENV === 'production') {
+    return NextResponse.json(
+      { error: 'Wyszukiwarka firm jest wyłączona (OM_USE_WL_API=false). Skontaktuj się z administratorem.' },
+      { status: 503 },
+    )
+  }
   const nipFormatted = `${nip.slice(0, 3)}-${nip.slice(3, 6)}-${nip.slice(6, 8)}-${nip.slice(8, 10)}`
   return NextResponse.json({
     nip: nipFormatted,
