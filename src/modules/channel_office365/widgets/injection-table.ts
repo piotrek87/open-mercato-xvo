@@ -33,7 +33,13 @@ export const injectionTable: ModuleInjectionTable = {
       groupLabel: 'Załączniki e-mail',
     },
   ],
-
+  // "New email" action (our own compose dialog with attachments) on the person detail header.
+  'detail:customers.person:header': [
+    {
+      widgetId: 'channel_office365.injection.compose-email',
+      priority: 60,
+    },
+  ],
 }
 
 export default injectionTable
