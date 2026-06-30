@@ -47,7 +47,6 @@
   "channel_office365.compose.crmLoading": "Wczytywanie załączników…",
   "channel_office365.compose.crmNoSubject": "(brak tematu)",
   "channel_office365.compose.crmRecordFiles": "Pliki kontaktu",
-  "channel_office365.compose.newEmail": "Nowy e-mail",
   "channel_office365.compose.removeAttachment": "Usuń załącznik",
   "channel_office365.compose.replyTitle": "Odpowiedz",
   "channel_office365.compose.selectChannel": "Wybierz konto",
