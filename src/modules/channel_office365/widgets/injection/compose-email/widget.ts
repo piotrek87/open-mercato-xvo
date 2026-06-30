@@ -1,16 +1,16 @@
 import type { InjectionWidgetModule } from '@open-mercato/shared/modules/widgets/injection'
-import O365ComposeTriggerWidget from './widget.client'
+import O365EmailsTabWidget from './widget.client'
 
 const widget: InjectionWidgetModule<Record<string, unknown>, Record<string, unknown>> = {
   metadata: {
     id: 'channel_office365.injection.compose-email',
-    title: 'Compose O365 email',
-    description: 'Opens our own Microsoft 365 compose dialog (with attachments) from the customer detail header.',
+    title: 'Microsoft 365 emails',
+    description: 'O365 emails tab (conversations + compose/reply with attachments) that replaces the built-in emails tab on the person detail.',
     features: ['customers.email.compose'],
     priority: 60,
     enabled: true,
   },
-  Widget: O365ComposeTriggerWidget,
+  Widget: O365EmailsTabWidget,
 }
 
 export default widget

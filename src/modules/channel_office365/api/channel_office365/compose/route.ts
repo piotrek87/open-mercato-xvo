@@ -41,7 +41,8 @@ const composeSchema = z
   .strict()
 
 /**
- * POST /api/channel_office365/compose — our own compose-with-attachments endpoint.
+ * POST /api/channel_office365/channel_office365/compose — our own compose-with-attachments endpoint.
+ * (Route generator prefixes the module id; file at api/channel_office365/compose maps to the double path.)
  *
  * App-only path that adds attachment REFERENCES on top of the core send-as-user flow. The core
  * `ComposeEmailDialog` and `/customers/people/[id]/emails` route stay untouched. Refs travel to our
@@ -107,8 +108,17 @@ export async function POST(req: Request): Promise<Response> {
     let files
     try {
       files = await resolver.resolve(refs, { tenantId: auth.tenantId as string, organizationId, actorUserId: userId })
-    } catch {
-      return NextResponse.json({ error: 'invalid_attachment', message: 'One or more attachments could not be resolved' }, { status: 400 })
+    } catch (err) {
+      console.error('[channel_office365.compose] attachment resolve failed', {
+        refs,
+        tenantId: auth.tenantId,
+        organizationId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      return NextResponse.json(
+        { error: 'invalid_attachment', message: err instanceof Error ? err.message : 'One or more attachments could not be resolved' },
+        { status: 400 },
+      )
     }
     const violation = checkAttachmentLimits(files.map((f) => ({ size: f.size, fileName: f.fileName })), resolveMailAttachmentLimits())
     if (violation) {

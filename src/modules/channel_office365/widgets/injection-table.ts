@@ -18,6 +18,16 @@ export const injectionTable: ModuleInjectionTable = {
   // groupLabel is rendered raw by PersonDetailTabs/CompanyDetailTabs (no t()), so
   // it must be a literal display string.
   'detail:customers.person:tabs': [
+    // Our O365 "E-maile" tab — replaces the built-in emails tab (hidden by the
+    // emails-tab-hide-core widget below) so conversations + compose/reply use our
+    // attachment-capable dialog. Higher priority keeps it ahead of "Załączniki e-mail"
+    // among injected tabs. groupLabel is rendered raw (no t()), so it is a literal.
+    {
+      widgetId: 'channel_office365.injection.compose-email',
+      priority: 100,
+      groupId: 'office365-emails',
+      groupLabel: 'E-maile',
+    },
     {
       widgetId: 'channel_office365.injection.email-attachments-section',
       priority: 50,
@@ -33,11 +43,11 @@ export const injectionTable: ModuleInjectionTable = {
       groupLabel: 'Załączniki e-mail',
     },
   ],
-  // "New email" action (our own compose dialog with attachments) on the person detail header.
+  // Headless: hides the built-in "Emails" tab so our injected "E-maile" tab is the single entry point.
   'detail:customers.person:header': [
     {
-      widgetId: 'channel_office365.injection.compose-email',
-      priority: 60,
+      widgetId: 'channel_office365.injection.emails-tab-hide-core',
+      priority: 10,
     },
   ],
 }

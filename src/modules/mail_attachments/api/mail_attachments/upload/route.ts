@@ -23,7 +23,9 @@ const PARTITION = 'email_outbound_attachments'
 const ENTITY_PENDING = 'mail_attachments:pending_upload'
 
 /**
- * POST /api/mail_attachments/upload — multipart single-file upload.
+ * POST /api/mail_attachments/mail_attachments/upload — multipart single-file upload.
+ * (The route generator prefixes the module id, so the file at api/mail_attachments/upload maps to
+ * /api/mail_attachments/mail_attachments/upload — same double-nesting as the channel_office365 routes.)
  *
  * Stores the file via the attachments module (the single source of truth for fileName/MIME/size)
  * and returns a durable reference (`attachmentId`) the caller puts in a `MailAttachmentRef`. The

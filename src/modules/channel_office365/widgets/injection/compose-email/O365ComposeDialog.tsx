@@ -32,10 +32,31 @@ export interface O365ComposeChannel {
 /** A staged attachment in the dialog — a durable ref id (`{kind:'attachment', id}`) + display meta. */
 type StagedAttachment = { id: string; fileName: string; size: number; source: 'upload' | 'crm' }
 
+/**
+ * Reply context, mirrors the core `ReplyState`. When present the dialog prefills To/Cc/Subject and
+ * threads the outgoing message (the compose route already accepts inReplyTo/references/parentMessageId).
+ */
+export type O365ComposeReply = {
+  inReplyTo?: string
+  references?: string[]
+  parentMessageId?: string
+  to: string[]
+  cc?: string[]
+  subject: string
+} | null
+
 type UploadResponse = { attachmentId: string; fileName: string; mimeType: string; size: number }
 type CrmAttachmentFile = { id: string; fileName: string; fileSize: number }
 type CrmAttachmentGroup = { subject: string | null; files: CrmAttachmentFile[] }
 type CrmAttachmentsResponse = { groups: CrmAttachmentGroup[] }
+type RecordFilesResponse = { items?: Array<{ id: string; fileName: string; fileSize?: number }> }
+
+/**
+ * Frozen entity id for the customers person record (see entities.ids.generated). Used to list the
+ * contact's "Files" tab attachments in the picker, alongside their email attachments. Both are plain
+ * `Attachment` rows, so the same `kind: 'attachment'` ref + resolver handles either source.
+ */
+const CUSTOMER_ENTITY_ID = 'customers:customer_entity'
 
 export interface O365ComposeDialogProps {
   open: boolean
@@ -43,6 +64,8 @@ export interface O365ComposeDialogProps {
   personId: string
   defaultRecipient?: string | null
   channels: O365ComposeChannel[]
+  /** When set, the dialog opens in reply mode: prefilled To/Cc/Subject + RFC threading headers. */
+  replyTo?: O365ComposeReply
   onSent?: () => void
 }
 
@@ -63,6 +86,7 @@ export function O365ComposeDialog({
   personId,
   defaultRecipient,
   channels,
+  replyTo,
   onSent,
 }: O365ComposeDialogProps) {
   const t = useT()
@@ -80,18 +104,20 @@ export function O365ComposeDialog({
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
-  // CRM picker state
+  // OM picker state (contact's email attachments + the contact's "Files" tab)
   const [pickerOpen, setPickerOpen] = React.useState(false)
   const [crmLoading, setCrmLoading] = React.useState(false)
   const [crmGroups, setCrmGroups] = React.useState<CrmAttachmentGroup[]>([])
+  const [recordFiles, setRecordFiles] = React.useState<CrmAttachmentFile[]>([])
 
-  // Reset on (re)open.
+  // Reset on (re)open. In reply mode prefill To/Cc/Subject from the thread context.
   React.useEffect(() => {
     if (!open) return
-    setTo(defaultRecipient ?? '')
-    setShowCc(false)
-    setCc('')
-    setSubject('')
+    const replyCc = replyTo?.cc?.filter(Boolean) ?? []
+    setTo(replyTo ? replyTo.to.join(', ') : (defaultRecipient ?? ''))
+    setShowCc(replyCc.length > 0)
+    setCc(replyCc.join(', '))
+    setSubject(replyTo?.subject ?? '')
     setBody('')
     setVisibility('private')
     setChannelId(channels[0]?.id ?? '')
@@ -100,7 +126,7 @@ export function O365ComposeDialog({
     setBusy(false)
     setError(null)
     setPickerOpen(false)
-  }, [open, defaultRecipient, channels])
+  }, [open, defaultRecipient, channels, replyTo])
 
   const toList = React.useMemo(() => parseRecipients(to), [to])
   const isSendDisabled =
@@ -122,7 +148,7 @@ export function O365ComposeDialog({
       for (const file of Array.from(files)) {
         const form = new FormData()
         form.append('file', file)
-        const res = await apiCall<UploadResponse>('/api/mail_attachments/upload', { method: 'POST', body: form })
+        const res = await apiCall<UploadResponse>('/api/mail_attachments/mail_attachments/upload', { method: 'POST', body: form })
         if (!res.ok || !res.result?.attachmentId) {
           const err = res.result as { error?: string } | null
           throw new Error(err?.error ?? t('channel_office365.compose.uploadFailed', 'Upload failed'))
@@ -139,19 +165,30 @@ export function O365ComposeDialog({
 
   const openCrmPicker = React.useCallback(async () => {
     setPickerOpen((v) => !v)
-    if (crmGroups.length > 0 || crmLoading) return
+    if (crmGroups.length > 0 || recordFiles.length > 0 || crmLoading) return
     setCrmLoading(true)
     try {
-      const res = await apiCall<CrmAttachmentsResponse>(
-        `/api/channel_office365/channel_office365/email-attachments?personId=${encodeURIComponent(personId)}`,
+      // Two sources, fetched together: the contact's synced email attachments and the contact's
+      // "Files" tab. Both yield Attachment ids that resolve through the same mail-attachment resolver.
+      const [emailsRes, filesRes] = await Promise.all([
+        apiCall<CrmAttachmentsResponse>(
+          `/api/channel_office365/channel_office365/email-attachments?personId=${encodeURIComponent(personId)}`,
+        ),
+        apiCall<RecordFilesResponse>(
+          `/api/attachments?entityId=${encodeURIComponent(CUSTOMER_ENTITY_ID)}&recordId=${encodeURIComponent(personId)}&page=1&pageSize=100`,
+        ),
+      ])
+      setCrmGroups(emailsRes.result?.groups ?? [])
+      setRecordFiles(
+        (filesRes.result?.items ?? []).map((f) => ({ id: f.id, fileName: f.fileName, fileSize: f.fileSize ?? 0 })),
       )
-      setCrmGroups(res.result?.groups ?? [])
     } catch {
       setCrmGroups([])
+      setRecordFiles([])
     } finally {
       setCrmLoading(false)
     }
-  }, [crmGroups.length, crmLoading, personId])
+  }, [crmGroups.length, recordFiles.length, crmLoading, personId])
 
   const handleSend = React.useCallback(async () => {
     setError(null)
@@ -167,16 +204,19 @@ export function O365ComposeDialog({
         body: body.trim(),
         bodyFormat: 'text' as const,
         visibility,
+        inReplyTo: replyTo?.inReplyTo,
+        references: replyTo?.references && replyTo.references.length > 0 ? replyTo.references : undefined,
+        parentMessageId: replyTo?.parentMessageId,
         attachments: attachments.length > 0 ? attachments.map((a) => ({ kind: 'attachment' as const, id: a.id })) : undefined,
       }
-      const res = await apiCall<{ messageId?: string }>('/api/channel_office365/compose', {
+      const res = await apiCall<{ messageId?: string }>('/api/channel_office365/channel_office365/compose', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
       })
       if (!res.ok) {
-        const err = res.result as { error?: string } | null
-        throw new Error(err?.error ?? t('channel_office365.compose.sendFailed', 'Send failed'))
+        const err = res.result as { error?: string; message?: string } | null
+        throw new Error(err?.message ?? err?.error ?? t('channel_office365.compose.sendFailed', 'Send failed'))
       }
       onSent?.()
       onOpenChange(false)
@@ -185,7 +225,7 @@ export function O365ComposeDialog({
     } finally {
       setBusy(false)
     }
-  }, [showCc, cc, personId, channelId, toList, subject, body, visibility, attachments, onSent, onOpenChange, t])
+  }, [showCc, cc, personId, channelId, toList, subject, body, visibility, attachments, replyTo, onSent, onOpenChange, t])
 
   const handleKeyDown = React.useCallback((event: React.KeyboardEvent) => {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !isSendDisabled) {
@@ -193,11 +233,40 @@ export function O365ComposeDialog({
     }
   }, [isSendDisabled, handleSend])
 
+  // One picker row, shared by the "Contact files" and per-email sections.
+  const renderPickerFile = (f: CrmAttachmentFile) => {
+    const added = attachments.some((a) => a.id === f.id)
+    return (
+      <button
+        key={f.id}
+        type="button"
+        disabled={added}
+        onClick={() => addStaged({ id: f.id, fileName: f.fileName, size: f.fileSize, source: 'crm' })}
+        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted/50 disabled:opacity-50"
+      >
+        <Paperclip className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+        <span className="min-w-0 flex-1 truncate">{f.fileName}</span>
+        <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(f.fileSize)}</span>
+        {added ? (
+          <span className="shrink-0 text-xs text-muted-foreground">
+            {t('channel_office365.compose.added', 'Added')}
+          </span>
+        ) : (
+          <Plus className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+        )}
+      </button>
+    )
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl" onKeyDown={handleKeyDown}>
         <DialogHeader>
-          <DialogTitle>{t('channel_office365.compose.title', 'New email')}</DialogTitle>
+          <DialogTitle>
+            {replyTo
+              ? t('channel_office365.compose.replyTitle', 'Reply')
+              : t('channel_office365.compose.title', 'New email')}
+          </DialogTitle>
         </DialogHeader>
 
         <div className="flex flex-col gap-4">
@@ -309,40 +378,26 @@ export function O365ComposeDialog({
               <div className="rounded-md border p-3">
                 {crmLoading ? (
                   <LoadingMessage label={t('channel_office365.compose.crmLoading', 'Loading attachments…')} />
-                ) : crmGroups.length === 0 ? (
+                ) : crmGroups.length === 0 && recordFiles.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
                     {t('channel_office365.compose.crmEmpty', 'No existing attachments for this contact.')}
                   </p>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="space-y-3">
+                    {recordFiles.length > 0 && (
+                      <div className="space-y-1">
+                        <p className="truncate text-xs font-medium text-muted-foreground">
+                          {t('channel_office365.compose.crmRecordFiles', 'Contact files')}
+                        </p>
+                        {recordFiles.map((f) => renderPickerFile(f))}
+                      </div>
+                    )}
                     {crmGroups.map((group, gi) => (
                       <div key={gi} className="space-y-1">
                         <p className="truncate text-xs font-medium text-muted-foreground">
                           {group.subject || t('channel_office365.compose.crmNoSubject', '(no subject)')}
                         </p>
-                        {group.files.map((f) => {
-                          const added = attachments.some((a) => a.id === f.id)
-                          return (
-                            <button
-                              key={f.id}
-                              type="button"
-                              disabled={added}
-                              onClick={() => addStaged({ id: f.id, fileName: f.fileName, size: f.fileSize, source: 'crm' })}
-                              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted/50 disabled:opacity-50"
-                            >
-                              <Paperclip className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-                              <span className="min-w-0 flex-1 truncate">{f.fileName}</span>
-                              <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(f.fileSize)}</span>
-                              {added ? (
-                                <span className="shrink-0 text-xs text-muted-foreground">
-                                  {t('channel_office365.compose.added', 'Added')}
-                                </span>
-                              ) : (
-                                <Plus className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-                              )}
-                            </button>
-                          )
-                        })}
+                        {group.files.map((f) => renderPickerFile(f))}
                       </div>
                     ))}
                   </div>
