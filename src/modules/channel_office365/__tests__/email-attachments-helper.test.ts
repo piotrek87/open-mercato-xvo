@@ -1,8 +1,9 @@
 /**
  * Unit test for the DB helper `loadAttachmentsForLinkIds`. The core Attachment
  * entity is mocked so the test stays light (no MikroORM runtime). Verifies the
- * query is scoped to the `email_attachments` partition — which is what makes the
- * result stored-files-only — and that rows are grouped by linkId with download URLs.
+ * query is scoped to the stored-file partitions (inbound `email_attachments` +
+ * outbound `email_outbound_attachments`, the latter re-homed to the link on send)
+ * and that rows are grouped by linkId with download URLs.
  */
 
 jest.mock('@open-mercato/core/modules/attachments/data/entities', () => ({
@@ -32,7 +33,7 @@ describe('loadAttachmentsForLinkIds', () => {
     expect(filter).toMatchObject({
       entityId: 'communication_channels:message_channel_link',
       recordId: { $in: ['L1', 'L2'] },
-      partitionCode: 'email_attachments',
+      partitionCode: { $in: ['email_attachments', 'email_outbound_attachments'] },
       tenantId: 't1',
     })
 

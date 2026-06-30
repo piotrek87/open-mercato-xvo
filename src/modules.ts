@@ -116,6 +116,7 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'webhooks', from: '@open-mercato/webhooks' },
   { id: 'customer_accounts', from: '@open-mercato/core' },
   { id: 'portal', from: '@open-mercato/core' },
+  { id: 'mail_attachments', from: '@app' },
   { id: 'activities', from: '@app' },
   {
     id: 'channel_office365',
