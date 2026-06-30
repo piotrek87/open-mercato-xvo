@@ -134,6 +134,7 @@ export const enabledModules: ModuleEntry[] = [
       },
     },
   },
+  { id: 'mail_attachments', from: '@app' },
   { id: 'activities', from: '@app' },
   {
     id: 'channel_office365',

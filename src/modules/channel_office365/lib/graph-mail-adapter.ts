@@ -34,8 +34,18 @@ import type {
   SendMessageResult,
   VerifyWebhookInput,
 } from '@open-mercato/core/modules/communication_channels/lib/adapter'
+import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { o365UserCredentialsSchema, O365_MAIL_PROVIDER_KEY } from './credentials'
 import { GraphApiError } from './graph-client'
+import { attachFilesToGraphDraft } from './graph-mail-attachments'
+// Provider-agnostic attachment contract (type-only + a pure parser). The resolver IMPLEMENTATION
+// is resolved at runtime via DI ('mailAttachmentResolver'), so there is no runtime cross-module
+// coupling — only the shared contract.
+import {
+  parseMailAttachmentRefs,
+  type MailAttachmentResolver,
+  type ResolvedMailAttachment,
+} from '../../mail_attachments/lib/types'
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -722,13 +732,34 @@ class O365EmailChannelAdapter implements ChannelAdapter {
     const creds = o365UserCredentialsSchema.parse(input.credentials)
     const payload = buildMailPayload(input)
 
-    // 2-step send: create draft → send. The draft response already carries the RFC
-    // internetMessageId, which is STABLE across folders.
+    // Resolve attachment REFERENCES carried in channelMetadata (provider-agnostic; refs only —
+    // no filename/MIME/size duplicated). Zero-overhead when there are none: the historical
+    // no-attachment send path below is unchanged. The adapter never touches CRM models — it hands
+    // refs to the DI-resolved `mailAttachmentResolver` and receives plain files back.
+    const refs = parseMailAttachmentRefs((input.metadata as Record<string, unknown> | undefined)?.attachments)
+    let files: ResolvedMailAttachment[] = []
+    if (refs.length > 0) {
+      const container = await createRequestContainer()
+      const resolver = container.resolve('mailAttachmentResolver') as MailAttachmentResolver
+      files = await resolver.resolve(refs, {
+        tenantId: input.scope.tenantId,
+        organizationId: input.scope.organizationId ?? null,
+        actorUserId: null,
+      })
+    }
+
+    // 2-step send: create draft → (attach files) → send. The draft response already carries the
+    // RFC internetMessageId, which is STABLE across folders.
     const draft = await graphMailPost('/me/messages', creds.accessToken, payload)
     const draftId = draft.id as string | undefined
     if (!draftId) {
       throw new Error('[graph-mail-adapter] POST /me/messages did not return message id')
     }
+
+    if (files.length > 0) {
+      await attachFilesToGraphDraft(creds.accessToken, draftId, files)
+    }
+
     await graphMailPost(`/me/messages/${draftId}/send`, creds.accessToken, null)
 
     // Return the RFC internetMessageId (not the mutable Graph item id) as externalMessageId.

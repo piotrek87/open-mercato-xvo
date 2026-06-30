@@ -7,6 +7,9 @@ export type { EmailAttachmentFile } from './email-attachments-shape'
 /** Entity key the email-attachment-fetcher uses when persisting downloaded files. */
 export const MESSAGE_LINK_ENTITY_ID = 'communication_channels:message_channel_link'
 export const EMAIL_ATTACHMENTS_PARTITION = 'email_attachments'
+/** Partition for OUTBOUND uploads (mail_attachments module). After a successful send they are
+ *  re-linked to the outbound MessageChannelLink, so the section must surface both partitions. */
+export const EMAIL_OUTBOUND_ATTACHMENTS_PARTITION = 'email_outbound_attachments'
 
 /**
  * Batch-load stored (downloadable) email attachments for a set of
@@ -29,7 +32,7 @@ export async function loadAttachmentsForLinkIds(
     {
       entityId: MESSAGE_LINK_ENTITY_ID,
       recordId: { $in: linkIds },
-      partitionCode: EMAIL_ATTACHMENTS_PARTITION,
+      partitionCode: { $in: [EMAIL_ATTACHMENTS_PARTITION, EMAIL_OUTBOUND_ATTACHMENTS_PARTITION] },
       tenantId: scope.tenantId,
     },
     { orderBy: { fileName: 'asc' } },
