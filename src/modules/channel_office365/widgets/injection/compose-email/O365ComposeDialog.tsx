@@ -132,8 +132,14 @@ export function O365ComposeDialog({
   const isSendDisabled =
     busy || uploading || toList.length === 0 || subject.trim().length === 0 || body.trim().length === 0 || !channelId
 
+  // Dedup by id AND by content proxy (fileName + size): the same file added twice (upload twice, or
+  // upload + "Attach from OM") collapses to one staged entry, so we never send/store duplicates.
   const addStaged = React.useCallback((item: StagedAttachment) => {
-    setAttachments((prev) => (prev.some((a) => a.id === item.id) ? prev : [...prev, item]))
+    setAttachments((prev) =>
+      prev.some((a) => a.id === item.id || (a.fileName === item.fileName && a.size === item.size))
+        ? prev
+        : [...prev, item],
+    )
   }, [])
 
   const removeStaged = React.useCallback((id: string) => {
@@ -145,7 +151,13 @@ export function O365ComposeDialog({
     setError(null)
     setUploading(true)
     try {
+      // Skip files already staged (same name + size) BEFORE uploading, so a re-pick never creates a
+      // throwaway pending upload on disk. `seen` also dedups duplicates within this same batch.
+      const seen = new Set(attachments.map((a) => `${a.fileName}|${a.size}`))
       for (const file of Array.from(files)) {
+        const key = `${file.name}|${file.size}`
+        if (seen.has(key)) continue
+        seen.add(key)
         const form = new FormData()
         form.append('file', file)
         const res = await apiCall<UploadResponse>('/api/mail_attachments/mail_attachments/upload', { method: 'POST', body: form })
@@ -161,7 +173,7 @@ export function O365ComposeDialog({
       setUploading(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
-  }, [addStaged, t])
+  }, [attachments, addStaged, t])
 
   const openCrmPicker = React.useCallback(async () => {
     setPickerOpen((v) => !v)
