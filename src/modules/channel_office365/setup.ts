@@ -100,6 +100,9 @@ export const setup: ModuleSetupConfig = {
   defaultRoleFeatures: {
     superadmin: ['channel_office365.view', 'channel_office365.configure', 'channel_office365.manage'],
     admin: ['channel_office365.view', 'channel_office365.configure', 'channel_office365.manage'],
+    // Self-service: mailboxes are per-user, so every regular user must be able to
+    // view + connect/disconnect + manage settings for THEIR OWN Microsoft 365 connection.
+    employee: ['channel_office365.view', 'channel_office365.configure', 'channel_office365.manage'],
   },
   async onTenantCreated() {
     ensureO365AdaptersRegistered()
