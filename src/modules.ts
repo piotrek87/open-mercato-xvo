@@ -138,6 +138,17 @@ export const enabledModules: ModuleEntry[] = [
             },
             metadata: { requireAuth: true, requireFeatures: ['customers.interactions.view'] },
           },
+          // Person-detail "Aktywności" tab badge (counts.activities) dedup: the core detail endpoint
+          // counts extMsg-CI (the O365 "E-maile"-tab rows) alongside source-CI, so the mailbox owner
+          // sees a doubled badge (e.g. 14) vs the 7 the timeline shows. This wrapper recomputes the
+          // badge from getInteractionCounts (same deduped logic as the list) so badge == list.
+          'GET /api/customers/people/[id]': {
+            handler: async (req: Request) => {
+              const { GET } = await import('./modules/channel_office365/lib/person-detail-counts-override')
+              return GET(req)
+            },
+            metadata: { requireAuth: true, requireFeatures: ['customers.people.view'] },
+          },
           // Hide the O365 calendar channel from the generic "my channels" list (and thus from the
           // CRM compose "Send as" picker, which can't send email through a calendar channel and
           // showed two confusing near-identical entries). The mail channel stays so compose can
