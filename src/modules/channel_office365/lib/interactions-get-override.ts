@@ -340,6 +340,26 @@ export async function GET(req: Request) {
         rowsQuery = rowsQuery.where('entity_id', '=', entityIds[0])
       } else {
         rowsQuery = rowsQuery.where('entity_id', 'in', entityIds)
+        // Company expansion pulls in linked persons' CIs. Each O365 email has a CI on BOTH the
+        // company and the person with the SAME `source`, so the expanded set shows every email
+        // twice. Keep one row per source (min id) within the expanded scope; null-source rows
+        // (manual activities) are untouched. Mirrors the count(distinct source) dedup in
+        // getInteractionCounts so the list, chips, and badge all agree.
+        const idList = sql.join(entityIds.map((x) => sql`${x}`))
+        const orgFilter = organizationIds.length > 0
+          ? sql`and d.organization_id in (${sql.join(organizationIds.map((o) => sql`${o}`))})`
+          : sql``
+        rowsQuery = rowsQuery.where(
+          sql<boolean>`(customer_interactions.source is null or not exists (
+            select 1 from customer_interactions d
+            where d.source = customer_interactions.source
+              and d.tenant_id = customer_interactions.tenant_id
+              and d.deleted_at is null
+              and d.entity_id in (${idList})
+              ${orgFilter}
+              and d.id < customer_interactions.id
+          ))`,
+        )
       }
     }
 
@@ -589,8 +609,12 @@ export async function getInteractionCounts(req: Request) {
       userFeatures: undefined,
     })
 
+    // count(distinct coalesce(source, id::text)) dedupes the company-expansion duplicates: an O365
+    // email carries the same `source` on both the company and its linked person, so a plain count(*)
+    // would double it. null-source (manual) rows fall back to their unique id, so each is counted
+    // once. Matches the list's per-source dedup.
     const rows = await baseQuery
-      .select(['interaction_type', sql<string>`count(*)`.as('count')])
+      .select(['interaction_type', sql<string>`count(distinct coalesce(source, id::text))`.as('count')])
       .groupBy('interaction_type')
       .execute() as Array<{ interaction_type: string; count: string | number }>
 
