@@ -75,6 +75,12 @@ class RealMsOAuthClient implements MsOAuthClient {
     url.searchParams.set('scope', scopes.join(' '))
     url.searchParams.set('state', input.state)
     url.searchParams.set('response_mode', 'query')
+    // Always interrupt Microsoft SSO and show the account chooser. Without this,
+    // Microsoft silently reuses the browser's existing session and re-connects the
+    // SAME account after a disconnect — so the user can never switch mailboxes.
+    // `select_account` forces the picker every time, with a "Use another account"
+    // option, so each connect can target a different account.
+    url.searchParams.set('prompt', 'select_account')
     if (input.loginHint) url.searchParams.set('login_hint', input.loginHint)
     return url.toString()
   }
